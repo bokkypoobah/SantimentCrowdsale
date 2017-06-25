@@ -32,66 +32,94 @@ contract PaymentListener {
 
 }
 
+///@notice XRateProvider is an external service providing an exchange rate from external currency to SAN token.
+/// it used for subscriptions priced in other currency than SAN (even calculated and paid formally in SAN).
+/// if non-default XRateProvider is set for some subscription, then the amount in SAN for every periodic payment
+/// will be recalculated using provided exchange rate.
+///
+/// Please note, that the exchange rate fraction is (uint32,uint32) number. It should be enough to express
+/// any real exchange rate volatility. Nevertheless you are advised to avoid too big numbers in the fraction.
+/// Possiibly you could implement the ratio of multiple token per SAN in order to keep the average ratio around 1:1.
+///
+/// The default XRateProvider (with id==0) defines exchange rate 1:1 and represents exchange rate of SAN token to itself.
+/// this provider is set by defalult and thus the subscription becomes nominated in SAN.
 contract XRateProvider {
-    function getRate() returns (uint);
+
+    //@dev returns current exchange rate (in form of a simple fraction) from other currency to SAN (f.e. ETH:SAN).
+    //@dev fraction numbers are restricted to uint16 to prevent overflow by calculation;
+    function getRate() returns (uint32 /*nominator*/, uint32 /*denominator*/);
+
+    //@dev provides a code for another currency, f.e. "ETH" or "USD"
     function getCode() returns (string);
 }
 
+
+//@notice data structure for SubscriptionModule
 contract SubscriptionBase {
     enum Status {OFFER, PAID, CHARGEABLE, ON_HOLD, CANCELED, EXPIRED, ARCHIVED}
 
+    //@dev subscription and subscription offer use the same structure. Offer is technically a template for subscription.
     struct Subscription {
-        address transferFrom;
-        address transferTo;
-        uint pricePerHour;
-        uint initialXrate;
-        uint16 xrateProviderId;
-        uint paidUntil;
-        uint chargePeriod;
-        uint depositAmount;
+        address transferFrom;   // customer (unset in subscription offer)
+        address transferTo;     // service provider
+        uint pricePerHour;      // price in SAN per hour (possibly recalculated using exchange rate)
+        uint32 initialXrate_n;  // nominator
+        uint32 initialXrate_d;  // denominator
+        uint16 xrateProviderId; // id of a registered exchange rate provider
+        uint paidUntil;         // subscription is paid until time
+        uint chargePeriod;      // subscription can't be charged more often than this period
+        uint depositAmount;     // upfront deposit on creating subscription (possibly recalculated using exchange rate)
 
-        uint startOn;
-        uint expireOn;
-        uint execCounter;
-        bytes descriptor;
-        uint onHoldSince;
+        uint startOn;           // for offer: can't be accepted before  <startOn> ; for subscription: can't be charged before <startOn>
+        uint expireOn;          // for offer: can't be accepted after  <expireOn> ; for subscription: can't be charged after  <expireOn>
+        uint execCounter;       // for offer: max num of subscriptions available  ; for subscription: num of charges made.
+        bytes descriptor;       // subscription payload (subject): evaluated by service provider.
+        uint onHoldSince;       // subscription: on-hold since time or 0 if not onHold. offer: unused: //ToDo: to be implemented
     }
 
     struct Deposit {
-        uint value;
-        address owner;
-        bytes descriptor;
+        uint value;         // value on deposit
+        address owner;      // usually a customer
+        bytes descriptor;   // service related descriptor to be evaluated by service provider
     }
 
-    //ToDo: change arg order
     event NewSubscription(address customer, address service, uint offerId, uint subId);
     event NewDeposit(uint depositId, uint value, address sender);
     event NewXRateProvider(address addr, uint16 xRateProviderId);
     event DepositClosed(uint depositId);
+    event OfferOnHold(uint offerId, bool onHold);
+    event OfferCanceled(uint offerId);
+    event SubOnHold(uint offerId, bool onHold);
+    event SubCanceled(uint subId);
 
 }
 
+///@dev interface for SubscriptionModule
 contract SubscriptionModule is SubscriptionBase, Base {
     function attachToken(address token) public;
 
-    function paymentTo(uint _value, bytes _paymentData, PaymentListener _to) returns (bool success);
-    function paymentFrom(uint _value, bytes _paymentData, address _from, PaymentListener _to) returns (bool success);
+    function paymentTo(uint _value, bytes _paymentData, PaymentListener _to) public returns (bool success);
+    function paymentFrom(uint _value, bytes _paymentData, address _from, PaymentListener _to) public returns (bool success);
 
-    function createSubscriptionOffer(uint _price, uint16 _xrateProviderId, uint _chargePeriod, uint _expireOn, uint _offerLimit, uint _depositValue, uint _startOn, bytes _descriptor) returns (uint subId);
-    function updateSubscriptionOffer(uint offerId, uint _offerLimit);
-    function acceptSubscriptionOffer(uint _offerId, uint _expireOn, uint _startOn) returns (uint newSubId);
-    function cancelSubscription(uint subId);
-    function cancelSubscription(uint subId, uint gasReserve);
-    function holdSubscription (uint subId) returns (bool success);
-    function unholdSubscription(uint subId) returns (bool success);
-    function executeSubscription(uint subId) returns (bool success);
-    function postponeDueDate(uint subId, uint newDueDate) returns (bool success);
-    function currentStatus(uint subId) constant returns(Status status);
+    function createSubscriptionOffer(uint _price, uint16 _xrateProviderId, uint _chargePeriod, uint _expireOn, uint _offerLimit, uint _depositValue, uint _startOn, bytes _descriptor) public returns (uint subId);
+    function updateSubscriptionOffer(uint offerId, uint _offerLimit) public;
+    function acceptSubscriptionOffer(uint _offerId, uint _expireOn, uint _startOn) public returns (uint newSubId);
+    function cancelSubscription(uint subId) public;
+    function cancelSubscription(uint subId, uint gasReserve) public;
+    function holdSubscription(uint subId) public returns (bool success);
+    function unholdSubscription(uint subId) public  returns (bool success);
+    function executeSubscription(uint subId) public returns (bool success);
+    function postponeDueDate(uint subId, uint newDueDate) public returns (bool success);
+    function currentStatus(uint subId) public constant returns(Status status);
     function forceArchiveSubscription(uint subId) external;
 
+    function holdSubscriptionOffer(uint offerId) public returns (bool success);
+    function unholdSubscriptionOffer(uint offerId) public returns (bool success);
+    function cancelSubscriptionOffer(uint offerId) public returns(bool);
+
     function paybackSubscriptionDeposit(uint subId);
-    function createDeposit(uint _value, bytes _descriptor) returns (uint subId);
-    function claimDeposit(uint depositId);
+    function createDeposit(uint _value, bytes _descriptor) public returns (uint subId);
+    function claimDeposit(uint depositId) public;
     function registerXRateProvider(XRateProvider addr) external returns (uint16 xrateProviderId);
     function enableServiceProvider(PaymentListener addr) external;
     function disableServiceProvider(PaymentListener addr) external;
@@ -100,6 +128,9 @@ contract SubscriptionModule is SubscriptionBase, Base {
         address transferFrom,
         address transferTo,
         uint pricePerHour,
+        uint32 initialXrate_n, //nominator
+        uint32 initialXrate_d, //denominator
+        uint16 xrateProviderId,
         uint chargePeriod,
         uint startOn,
         bytes descriptor
@@ -119,9 +150,8 @@ contract SubscriptionModule is SubscriptionBase, Base {
 
 }
 
-contract SubscriptionModuleImpl is SubscriptionModule  {
-    address public admin;     //admin should be a multisig contract implementing advanced sign/recovery strategies
-    address public nextAdmin; //used in two step schema for admin change. This enforces nextAdmin to use his signature before becomes admin.
+//@dev implementation
+contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
 
     uint public PLATFORM_FEE_PER_10000 = 1; //0,01%
     uint public totalOnDeposit;
@@ -129,8 +159,15 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
     ERC20ModuleSupport san;
 
     function SubscriptionModuleImpl() {
-        admin = msg.sender;
+        owner = msg.sender;
         xrateProviders.push(XRateProvider(this));
+    }
+
+    // ------------------------------------------------------------------------
+    // Don't accept ethers
+    // ------------------------------------------------------------------------
+    function () {
+        throw;
     }
 
     function attachToken(address token) public {
@@ -138,25 +175,16 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
         san = ERC20ModuleSupport(token);
     }
 
-    function setPlatformFeePer10000(uint newFee) external only(admin) {
+    function setPlatformFeePer10000(uint newFee) external only(owner) {
         require (newFee <= 10000); //formally maximum fee is 100% (completely insane but technically possible)
         PLATFORM_FEE_PER_10000 = newFee;
     }
 
-    function prepareAdminChange(address newAdmin) external only(admin) {
-        nextAdmin = newAdmin;
-    }
-
-    function confirmAdminChange() external only(nextAdmin) {
-        admin = nextAdmin;
-        delete nextAdmin;
-    }
-
-    function enableServiceProvider(PaymentListener addr) external only(admin) {
+    function enableServiceProvider(PaymentListener addr) external only(owner) {
         providerRegistry[addr] = true;
     }
 
-    function disableServiceProvider(PaymentListener addr) external only(admin) {
+    function disableServiceProvider(PaymentListener addr) external only(owner) {
         delete providerRegistry[addr];
     }
 
@@ -164,12 +192,15 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
         address transferFrom,
         address transferTo,
         uint pricePerHour,
+        uint32 initialXrate_n, //nominator
+        uint32 initialXrate_d, //denominator
+        uint16 xrateProviderId,
         uint chargePeriod,
         uint startOn,
         bytes descriptor
     ) {
         Subscription sub = subscriptions[subId];
-        return (sub.transferFrom, sub.transferTo, sub.pricePerHour, sub.chargePeriod, sub.startOn, sub.descriptor);
+        return (sub.transferFrom, sub.transferTo, sub.pricePerHour, sub.initialXrate_n, sub.initialXrate_d, sub.xrateProviderId, sub.chargePeriod, sub.startOn, sub.descriptor);
     }
 
     function subscriptionStatus(uint subId) external constant returns(
@@ -183,7 +214,7 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
         return (sub.depositAmount, sub.expireOn, sub.execCounter, sub.paidUntil, sub.onHoldSince);
     }
 
-    function registerXRateProvider(XRateProvider addr) external only(admin) returns (uint16 xrateProviderId) {
+    function registerXRateProvider(XRateProvider addr) external only(owner) returns (uint16 xrateProviderId) {
         xrateProviderId = uint16(xrateProviders.length);
         xrateProviders.push(addr);
         NewXRateProvider(addr, xrateProviderId);
@@ -212,7 +243,7 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
     function executeSubscription(uint subId) public returns (bool) {
         Subscription storage sub = subscriptions[subId];
         assert (_isNotOffer(sub));
-        assert (msg.sender == sub.transferFrom || msg.sender == sub.transferTo || msg.sender == admin);
+        assert (msg.sender == sub.transferFrom || msg.sender == sub.transferTo || msg.sender == owner);
         if (_currentStatus(sub)==Status.CHARGEABLE) {
             var _from = sub.transferFrom;
             var _to = sub.transferTo;
@@ -268,12 +299,15 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
     returns (uint subId) {
         assert (_startOn < _expireOn);
         assert (_chargePeriod <= 10 years);
+        var (_xrate_n, _xrate_d) = _xrateProviderId == 0 ? (1,1) : XRateProvider(xrateProviders[_xrateProviderId]).getRate();
+        assert (_xrate_n > 0 && _xrate_d > 0);
         subscriptions[++subscriptionCounter] = Subscription ({
             transferFrom    : 0,
             transferTo      : msg.sender,
             pricePerHour    : _price,
             xrateProviderId : _xrateProviderId,
-            initialXrate    : _xrateProviderId == 0 ? 1 : XRateProvider(xrateProviders[_xrateProviderId]).getRate(),
+            initialXrate_n  : _xrate_n,
+            initialXrate_d  : _xrate_d,
             paidUntil       : 0,
             chargePeriod    : _chargePeriod,
             depositAmount   : _depositAmount,
@@ -298,8 +332,9 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
         assert (_isOffer(offer));
         assert(offer.startOn == 0     || offer.startOn <= now);
         assert(offer.expireOn == 0    || offer.expireOn > now);
-        assert(offer.execCounter == 0 || offer.execCounter-- > 0);
-
+        assert(offer.onHoldSince == 0);
+        assert(offer.execCounter > 0);
+        --offer.execCounter;
         newSubId = subscriptionCounter + 1;
         //create a clone of the offer...
         Subscription storage newSub = subscriptions[newSubId] = offer;
@@ -316,13 +351,24 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
         return (subscriptionCounter = newSubId);
     }
 
+    function cancelSubscriptionOffer(uint offerId) public returns(bool) {
+        Subscription storage offer = subscriptions[offerId];
+        assert (_isOffer(offer));
+        assert (offer.transferTo == msg.sender || owner == msg.sender); //only service provider or owner is allowed to cancel the offer
+        if (offer.expireOn>now){
+            offer.expireOn = now;
+            OfferCanceled(offerId);
+            return true;
+        } else {return false;}
+    }
+
     function cancelSubscription(uint subId) public {
         return cancelSubscription(subId, 0);
     }
 
     function cancelSubscription(uint subId, uint gasReserve) public {
         Subscription storage sub = subscriptions[subId];
-        assert (sub.transferFrom == msg.sender || admin == msg.sender); //only subscription owner or admin is allowed to cancel it
+        assert (sub.transferFrom == msg.sender || owner == msg.sender); //only subscription owner or owner is allowed to cancel it
         assert (_isNotOffer(sub));
         var _to = sub.transferTo;
         sub.expireOn = max(now, sub.paidUntil);
@@ -333,6 +379,7 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
                 //Later: is it possible to evaluate return value here? We need to in order to
             }
         }
+        SubCanceled(subId);
     }
 
     function forceArchiveSubscription(uint subId) external {
@@ -359,6 +406,30 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
         san._mintFromDeposit(msg.sender, depositAmount);
     }
 
+    // place an active offer on hold
+    function holdSubscriptionOffer(uint offerId) public returns (bool success) {
+        Subscription storage offer = subscriptions[offerId];
+        assert (_isOffer(offer));
+        require (msg.sender == offer.transferTo || msg.sender == owner); //only owner or service provider can place the offer on hold.
+        if (offer.onHoldSince == 0) {
+            offer.onHoldSince = now;
+            OfferOnHold(offerId, true);
+            return true;
+        } else { return false; }
+    }
+
+    // resume currently on-hold offer.
+    function unholdSubscriptionOffer(uint offerId) public returns (bool success) {
+        Subscription storage offer = subscriptions[offerId];
+        assert (_isOffer(offer));
+        require (msg.sender == offer.transferTo || msg.sender == owner); //only owner or service provider can reactivate the offer.
+        if (offer.onHoldSince > 0) {
+            offer.onHoldSince = 0;
+            OfferOnHold(offerId, false);
+            return true;
+        } else { return false; }
+    }
+
     // a service can allow/disallow a hold/unhold request
     function holdSubscription (uint subId) public returns (bool success) {
         Subscription storage sub = subscriptions[subId];
@@ -367,6 +438,7 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
         var _to = sub.transferTo;
         if (msg.sender == _to || PaymentListener(_to).onSubUnHold(subId, msg.sender, true)) {
             sub.onHoldSince = now;
+            SubOnHold(subId, true);
             return true;
         } else { return false; }
     }
@@ -380,6 +452,7 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
         if (msg.sender == _to || PaymentListener(_to).onSubUnHold(subId, msg.sender, false)) {
             sub.paidUntil += now - sub.onHoldSince;
             sub.onHoldSince = 0;
+            SubOnHold(subId, false);
             return true;
         } else { return false; }
     }
@@ -425,10 +498,14 @@ contract SubscriptionModuleImpl is SubscriptionModule  {
         return _applyXchangeRate(sub.pricePerHour * sub.chargePeriod, sub) / 1 hours;
     }
 
-    function _applyXchangeRate(uint amount, Subscription storage sub) internal returns (uint){
-        return sub.xrateProviderId == 0
-            ? amount
-            : amount * XRateProvider(xrateProviders[sub.xrateProviderId]).getRate() / sub.initialXrate;
+    function _applyXchangeRate(uint amount, Subscription storage sub) internal returns (uint) {
+        if (sub.xrateProviderId > 0) {
+            // xrate_n: nominator
+            // xrate_d: denominator of the exchange rate fraction.
+            var (xrate_n, xrate_d) = XRateProvider(xrateProviders[sub.xrateProviderId]).getRate();
+            amount = amount * sub.initialXrate_n * xrate_d / sub.initialXrate_d / xrate_n;
+        }
+        return amount;
     }
 
     function _isOffer(Subscription storage sub) internal constant returns (bool){

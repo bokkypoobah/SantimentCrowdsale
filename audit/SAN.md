@@ -1,6 +1,7 @@
 # SAN
 
 ```javascript
+// BK Ok
 pragma solidity ^0.4.11;
 
 import "./ERC20.sol";
@@ -8,19 +9,25 @@ import "./SubscriptionModule.sol";
 
 contract SAN is Owned, ERC20Impl, MintableToken, XRateProvider, ERC20ModuleSupport {
 
+    // BK Ok
     string public constant name     = "SANtiment network token";
+    // BK Ok
     string public constant symbol   = "SAN";
+    // BK Ok
     uint8  public constant decimals = 15;
 
+    // BK NOTE This should be a constant but there is a Solidity bug in 0.4.11 - https://github.com/ethereum/solidity/issues/2441
     address CROWDSALE_MINTER = 0x00000000;
     address public SUBSCRIPTION_MODULE = 0x00000000;
     address public beneficiary;
 
+    // BK NOTE This is a variable not a constant
     uint public PLATFORM_FEE_PER_10000 = 1; //0.01%
     uint public totalOnDeposit;
     uint public totalInCirculation;
 
     ///@dev constructor
+    // BK Ok
     function SAN() {
         // BK NOTE Owner is already assigned in the Owned constructor
         beneficiary = owner = msg.sender;
@@ -29,6 +36,7 @@ contract SAN is Owned, ERC20Impl, MintableToken, XRateProvider, ERC20ModuleSuppo
     // ------------------------------------------------------------------------
     // Don't accept ethers
     // ------------------------------------------------------------------------
+    // BK Ok
     function () {
         throw;
     }
@@ -36,6 +44,7 @@ contract SAN is Owned, ERC20Impl, MintableToken, XRateProvider, ERC20ModuleSuppo
     //======== SECTION Configuration: Owner only ========
     //
     ///@notice set beneficiary - the account receiving platform fees.
+    // BK NOTE only(owner) -> onlyOwner
     function setBeneficiary(address newBeneficiary)
     external
     only(owner) {
@@ -45,6 +54,7 @@ contract SAN is Owned, ERC20Impl, MintableToken, XRateProvider, ERC20ModuleSuppo
 
     ///@notice attach module managing subscriptions. if subModule==0x0, then disables subscription functionality for this token.
     /// detached module can usually manage subscriptions, but all operations changing token balances are disabled.
+    // BK NOTE only(owner) -> onlyOwner
     function attachSubscriptionModule(SubscriptionModule subModule)
     external
     only(owner) {
@@ -53,6 +63,7 @@ contract SAN is Owned, ERC20Impl, MintableToken, XRateProvider, ERC20ModuleSuppo
     }
 
     ///@notice set platform fee denominated in 1/10000 of SAN token. Thus "1" means 0.01% of SAN token.
+    // BK NOTE only(owner) -> onlyOwner
     function setPlatformFeePer10000(uint newFee)
     external
     only(owner) {
@@ -150,6 +161,7 @@ contract SAN is Owned, ERC20Impl, MintableToken, XRateProvider, ERC20ModuleSuppo
     }
 
     ///@notice start normal operation of the token. No minting is possible after this point.
+    // BK NOTE only(owner) -> onlyOwner
     function start()
     isNotStartedOnly
     only(owner) {

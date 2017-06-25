@@ -16,27 +16,41 @@ Details are in:
 ### Initial Review
 Comments from initial review of [9394bf3aaff84fc03c0341a5eedc59b02af95c36](https://github.com/santiment/ethereum-crowdsale/tree/9394bf3aaff84fc03c0341a5eedc59b02af95c36):
 
-* \#1 LOW IMPORTANCE CrowdsaleMinter TOKEN should be lowercase as it is not a constant
-* \#2 LOW IMPORTANCE CrowdsaleMinter Use the Owner/Owned pattern for ownership and transfer of ownership, including `acceptOwnership()` - [example](https://github.com/bokkypoobah/RAREPeperiumToken/blob/master/contracts/RareToken.sol#L11-L35)
-  * Jun 25 2017 Included in Base
-* \#3 LOW-MEDIUM IMPORTANCE * `function ()` that **throw**s should be implemented to prevent ETH being accepted by the contracts - [example](https://github.com/bokkypoobah/RAREPeperiumToken/blob/master/contracts/RareToken.sol#L139-L144)
-* \#4 LOW-MEDIUM IMPORANCE * Allow owner to withdraw tokens accidentally sent to the contracts - [example](https://github.com/openanx/OpenANXToken/blob/master/contracts/OpenANXToken.sol#L451-L458)
-* \#5 LOW IMPORTANCE CrowdsaleMinter `total_received_amount` -> `totalReceivedAmount`
-* \#6 LOW IMPORTANCE CrowdsaleMinter `TOTAL_RECEIVED_ETH()` -> `totalReceivedEth()`  
-* \#7 LOW IMPORTANCE CrowdsaleMinter `TOKEN_STARTED` -> `tokenStarted`
-* \#8 LOW IMPORTANCE CrowdsaleMinter The long bits of logic in `validSetupOnly` should be moved into the constructor directly as it is used in only one place, making it easier to read
-* \#9 LOW IMPORTANCE CrowdsaleMinter The states in `currentState()` is a bit complicated. It would be useful to have a state change table in the comments above the function as this is critical to the functioning of the contracts
-* \#10 LOW IMPORTANCE * There are some `uint24`'s in your code. It would be safer to use `uint256` generally rather than save space and this reduces the chance of type conversion errors. It may be cheaper in gas to use `uint256` as this is the native type. Keep `uint8` for `decimals` only
-* \#11 LOW IMPORTANCE CrowdsaleMinter There are several sets of doubly declared (similar) constants. e.g. use `uint public constant COMMUNITY_PLUS_PRIORITY_SALE_CAP = 45000 ether;` as this is less confusing and reduces the chance that the incorrect version is used
-* \#12 LOW IMPORTANCE SAN & SubscriptionModule `PLATFORM_FEE_PER_10000` is not a constant, should be `platformFeePer10K`
-* \#13 LOW IMPORTANCE SubscriptionModule Can the use of `tx.origin` in `if (tx.origin==msg.sender) { throw; }` be removed as there are upcoming changes expected to the meaning of `tx.origin` - [reference](https://www.reddit.com/r/ethereum/comments/6d11lv/erc_about_txorigin_change_for_account_abstraction/)
-* \#14 LOW IMPORTANCE CrowdsaleMinter `isAdmin` is so similar in function to `isOwner` and should probably be merged into `isOwner` to reduce complexity
-* \#15 MEDIUM IMPORTANCE * Create a script for monitoring the state of your contracts and events logged - [example](https://github.com/openanx/OpenANXToken/blob/master/scripts/getOpenANXTokenDetails.sh) and [sample output](https://github.com/openanx/OpenANXToken/blob/master/scripts/Main_20170625_015900.txt)
-* \#16 LOW IMPORTANCE There are uses of both `uint` and `uint256`. Choose one and stick with it, for consistency
+* \#1 LOW IMPORTANCE **CrowdsaleMinter** TOKEN should be lowercase as it is not a constant
+* \#2 LOW IMPORTANCE **CrowdsaleMinter** Use the Owner/Owned pattern for ownership and transfer of ownership, including `acceptOwnership()` - [example](https://github.com/bokkypoobah/RAREPeperiumToken/blob/master/contracts/RareToken.sol#L11-L35)
+  * Jun 25 2017 Included in **Base**
+  * [ ] Some places where `only(owner)` can be replaced with `onlyOwner`
+* \#3 LOW-MEDIUM IMPORTANCE **\*** `function ()` that **throw**s should be implemented to prevent ETH being accepted by the contracts - [example](https://github.com/bokkypoobah/RAREPeperiumToken/blob/master/contracts/RareToken.sol#L139-L144)
+* \#4 LOW-MEDIUM IMPORANCE **\*** Allow owner to withdraw tokens accidentally sent to the contracts - [example](https://github.com/openanx/OpenANXToken/blob/master/contracts/OpenANXToken.sol#L451-L458)
+* \#5 LOW IMPORTANCE **CrowdsaleMinter** `total_received_amount` -> `totalReceivedAmount`
+* \#6 LOW IMPORTANCE **CrowdsaleMinter** `TOTAL_RECEIVED_ETH()` -> `totalReceivedEth()`  
+* \#7 LOW IMPORTANCE **CrowdsaleMinter** `TOKEN_STARTED` -> `tokenStarted`
+* \#8 LOW IMPORTANCE **CrowdsaleMinter** The long bits of logic in `validSetupOnly` should be moved into the constructor directly as it is used in only one place, making it easier to read
+* \#9 LOW IMPORTANCE **CrowdsaleMinter** The states in `currentState()` is a bit complicated. It would be useful to have a state change table in the comments above the function as this is critical to the functioning of the contracts
+* \#10 LOW IMPORTANCE **\*** There are some `uint24`'s in your code. It would be safer to use `uint256` generally rather than save space and this reduces the chance of type conversion errors. It may be cheaper in gas to use `uint256` as this is the native type. Keep `uint8` for `decimals` only
+* \#11 LOW IMPORTANCE **CrowdsaleMinter** There are several sets of doubly declared (similar) constants. e.g. use `uint public constant COMMUNITY_PLUS_PRIORITY_SALE_CAP = 45000 ether;` as this is less confusing and reduces the chance that the incorrect version is used
+* \#12 LOW IMPORTANCE **SAN** and **SubscriptionModule** `PLATFORM_FEE_PER_10000` is not a constant, should be `platformFeePer10K`
+* \#13 LOW IMPORTANCE **CrowdsaleMinter** Can the use of `tx.origin` in `if (tx.origin==msg.sender) { throw; }` be removed as there are upcoming changes expected to the meaning of `tx.origin` - [reference](https://www.reddit.com/r/ethereum/comments/6d11lv/erc_about_txorigin_change_for_account_abstraction/). A possible alternative is to use `isContract(...)` from [StatusContribution](https://github.com/status-im/status-network-token/blob/master/contracts/StatusContribution.sol#L406-L416) 
+* \#14 LOW IMPORTANCE **CrowdsaleMinter** `isAdmin` is so similar in function to `isOwner` and should probably be merged into `isOwner` to reduce complexity
+* \#15 MEDIUM IMPORTANCE **\*** Create a script for monitoring the state of your contracts and events logged - [example](https://github.com/openanx/OpenANXToken/blob/master/scripts/getOpenANXTokenDetails.sh) and [sample output](https://github.com/openanx/OpenANXToken/blob/master/scripts/Main_20170625_015900.txt)
+* \#16 LOW IMPORTANCE **\*** There are uses of both `uint` and `uint256`. Choose one and stick with it, for consistency
+
+<br />
 
 ### Second Review
 
+* \#17 LOW IMPORTANCE **SAN** and **SubscriptionModule** In the constructor, `owner` is already assigned in **Owned**
+* \#18 LOW IMPORTANCE **SAN** `CROWDSALE_MINTER` should be a constant. Note that there is a Solidity compiler bug that generates a warning if you [set address variables as constant](https://github.com/ethereum/solidity/issues/2441) but the fix is not available in 0.4.11
+* \#19 LOW IMPORTANCE **CrowdsaleMinter** `owner` already declared in **Owner**, and initialised in constructor
+* \#20 LOW IMPORTANCE **CrowdsaleMinter** `withdrawFundsAndStartToken(...)` should use `transfer(...)` instead of `if (!owner.send(this.balance)) throw;` - [reference](https://github.com/ConsenSys/smart-contract-best-practices#be-aware-of-the-tradeoffs-between-send-transfer-and-callvalue). Same for the `send(...)` in `_sendRefund(...)`
 
+<br />
+
+<hr />
+
+## References
+
+* [Ethereum Contract Security Techniques and Tips](https://github.com/ConsenSys/smart-contract-best-practices)
 
 <br />
 

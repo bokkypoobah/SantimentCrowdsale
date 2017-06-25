@@ -53,62 +53,73 @@ contract XRateProvider {
     function getCode() returns (string);
 }
 
+
+//@notice data structure for SubscriptionModule
 contract SubscriptionBase {
     enum Status {OFFER, PAID, CHARGEABLE, ON_HOLD, CANCELED, EXPIRED, ARCHIVED}
 
+    //@dev subscription and subscription offer use the same structure. Offer is technically a template for subscription.
     struct Subscription {
-        address transferFrom;
-        address transferTo;
-        uint pricePerHour;
-        uint32 initialXrate_n; //nominator
-        uint32 initialXrate_d; //denominator
-        uint16 xrateProviderId;
-        uint paidUntil;
-        uint chargePeriod;
-        uint depositAmount;
+        address transferFrom;   // customer (unset in subscription offer)
+        address transferTo;     // service provider
+        uint pricePerHour;      // price in SAN per hour (possibly recalculated using exchange rate)
+        uint32 initialXrate_n;  // nominator
+        uint32 initialXrate_d;  // denominator
+        uint16 xrateProviderId; // id of a registered exchange rate provider
+        uint paidUntil;         // subscription is paid until time
+        uint chargePeriod;      // subscription can't be charged more often than this period
+        uint depositAmount;     // upfront deposit on creating subscription (possibly recalculated using exchange rate)
 
-        uint startOn;
-        uint expireOn;
-        uint execCounter;
-        bytes descriptor;
-        uint onHoldSince;
+        uint startOn;           // for offer: can't be accepted before  <startOn> ; for subscription: can't be charged before <startOn>
+        uint expireOn;          // for offer: can't be accepted after  <expireOn> ; for subscription: can't be charged after  <expireOn>
+        uint execCounter;       // for offer: max num of subscriptions available  ; for subscription: num of charges made.
+        bytes descriptor;       // subscription payload (subject): evaluated by service provider.
+        uint onHoldSince;       // subscription: on-hold since time or 0 if not onHold. offer: unused: //ToDo: to be implemented
     }
 
     struct Deposit {
-        uint value;
-        address owner;
-        bytes descriptor;
+        uint value;         // value on deposit
+        address owner;      // usually a customer
+        bytes descriptor;   // service related descriptor to be evaluated by service provider
     }
 
-    //ToDo: change arg order
     event NewSubscription(address customer, address service, uint offerId, uint subId);
     event NewDeposit(uint depositId, uint value, address sender);
     event NewXRateProvider(address addr, uint16 xRateProviderId);
     event DepositClosed(uint depositId);
+    event OfferOnHold(uint offerId, bool onHold);
+    event OfferCanceled(uint offerId);
+    event SubOnHold(uint offerId, bool onHold);
+    event SubCanceled(uint subId);
 
 }
 
+///@dev interface for SubscriptionModule
 contract SubscriptionModule is SubscriptionBase, Base {
     function attachToken(address token) public;
 
-    function paymentTo(uint _value, bytes _paymentData, PaymentListener _to) returns (bool success);
-    function paymentFrom(uint _value, bytes _paymentData, address _from, PaymentListener _to) returns (bool success);
+    function paymentTo(uint _value, bytes _paymentData, PaymentListener _to) public returns (bool success);
+    function paymentFrom(uint _value, bytes _paymentData, address _from, PaymentListener _to) public returns (bool success);
 
-    function createSubscriptionOffer(uint _price, uint16 _xrateProviderId, uint _chargePeriod, uint _expireOn, uint _offerLimit, uint _depositValue, uint _startOn, bytes _descriptor) returns (uint subId);
-    function updateSubscriptionOffer(uint offerId, uint _offerLimit);
-    function acceptSubscriptionOffer(uint _offerId, uint _expireOn, uint _startOn) returns (uint newSubId);
-    function cancelSubscription(uint subId);
-    function cancelSubscription(uint subId, uint gasReserve);
-    function holdSubscription (uint subId) returns (bool success);
-    function unholdSubscription(uint subId) returns (bool success);
-    function executeSubscription(uint subId) returns (bool success);
-    function postponeDueDate(uint subId, uint newDueDate) returns (bool success);
-    function currentStatus(uint subId) constant returns(Status status);
+    function createSubscriptionOffer(uint _price, uint16 _xrateProviderId, uint _chargePeriod, uint _expireOn, uint _offerLimit, uint _depositValue, uint _startOn, bytes _descriptor) public returns (uint subId);
+    function updateSubscriptionOffer(uint offerId, uint _offerLimit) public;
+    function acceptSubscriptionOffer(uint _offerId, uint _expireOn, uint _startOn) public returns (uint newSubId);
+    function cancelSubscription(uint subId) public;
+    function cancelSubscription(uint subId, uint gasReserve) public;
+    function holdSubscription(uint subId) public returns (bool success);
+    function unholdSubscription(uint subId) public  returns (bool success);
+    function executeSubscription(uint subId) public returns (bool success);
+    function postponeDueDate(uint subId, uint newDueDate) public returns (bool success);
+    function currentStatus(uint subId) public constant returns(Status status);
     function forceArchiveSubscription(uint subId) external;
 
+    function holdSubscriptionOffer(uint offerId) public returns (bool success);
+    function unholdSubscriptionOffer(uint offerId) public returns (bool success);
+    function cancelSubscriptionOffer(uint offerId) public returns(bool);
+
     function paybackSubscriptionDeposit(uint subId);
-    function createDeposit(uint _value, bytes _descriptor) returns (uint subId);
-    function claimDeposit(uint depositId);
+    function createDeposit(uint _value, bytes _descriptor) public returns (uint subId);
+    function claimDeposit(uint depositId) public;
     function registerXRateProvider(XRateProvider addr) external returns (uint16 xrateProviderId);
     function enableServiceProvider(PaymentListener addr) external;
     function disableServiceProvider(PaymentListener addr) external;
@@ -139,6 +150,7 @@ contract SubscriptionModule is SubscriptionBase, Base {
 
 }
 
+//@dev implementation
 contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
 
     uint public PLATFORM_FEE_PER_10000 = 1; //0,01%
@@ -320,8 +332,9 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         assert (_isOffer(offer));
         assert(offer.startOn == 0     || offer.startOn <= now);
         assert(offer.expireOn == 0    || offer.expireOn > now);
-        assert(offer.execCounter == 0 || offer.execCounter-- > 0);
-
+        assert(offer.onHoldSince == 0);
+        assert(offer.execCounter > 0);
+        --offer.execCounter;
         newSubId = subscriptionCounter + 1;
         //create a clone of the offer...
         Subscription storage newSub = subscriptions[newSubId] = offer;
@@ -336,6 +349,17 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         NewSubscription(newSub.transferFrom, newSub.transferTo, _offerId, newSubId);
         assert (PaymentListener(newSub.transferTo).onSubNew(newSubId, _offerId));
         return (subscriptionCounter = newSubId);
+    }
+
+    function cancelSubscriptionOffer(uint offerId) public returns(bool) {
+        Subscription storage offer = subscriptions[offerId];
+        assert (_isOffer(offer));
+        assert (offer.transferTo == msg.sender || owner == msg.sender); //only service provider or owner is allowed to cancel the offer
+        if (offer.expireOn>now){
+            offer.expireOn = now;
+            OfferCanceled(offerId);
+            return true;
+        } else {return false;}
     }
 
     function cancelSubscription(uint subId) public {
@@ -355,6 +379,7 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
                 //Later: is it possible to evaluate return value here? We need to in order to
             }
         }
+        SubCanceled(subId);
     }
 
     function forceArchiveSubscription(uint subId) external {
@@ -381,6 +406,30 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         san._mintFromDeposit(msg.sender, depositAmount);
     }
 
+    // place an active offer on hold
+    function holdSubscriptionOffer(uint offerId) public returns (bool success) {
+        Subscription storage offer = subscriptions[offerId];
+        assert (_isOffer(offer));
+        require (msg.sender == offer.transferTo || msg.sender == owner); //only owner or service provider can place the offer on hold.
+        if (offer.onHoldSince == 0) {
+            offer.onHoldSince = now;
+            OfferOnHold(offerId, true);
+            return true;
+        } else { return false; }
+    }
+
+    // resume currently on-hold offer.
+    function unholdSubscriptionOffer(uint offerId) public returns (bool success) {
+        Subscription storage offer = subscriptions[offerId];
+        assert (_isOffer(offer));
+        require (msg.sender == offer.transferTo || msg.sender == owner); //only owner or service provider can reactivate the offer.
+        if (offer.onHoldSince > 0) {
+            offer.onHoldSince = 0;
+            OfferOnHold(offerId, false);
+            return true;
+        } else { return false; }
+    }
+
     // a service can allow/disallow a hold/unhold request
     function holdSubscription (uint subId) public returns (bool success) {
         Subscription storage sub = subscriptions[subId];
@@ -389,6 +438,7 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         var _to = sub.transferTo;
         if (msg.sender == _to || PaymentListener(_to).onSubUnHold(subId, msg.sender, true)) {
             sub.onHoldSince = now;
+            SubOnHold(subId, true);
             return true;
         } else { return false; }
     }
@@ -402,6 +452,7 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         if (msg.sender == _to || PaymentListener(_to).onSubUnHold(subId, msg.sender, false)) {
             sub.paidUntil += now - sub.onHoldSince;
             sub.onHoldSince = 0;
+            SubOnHold(subId, false);
             return true;
         } else { return false; }
     }

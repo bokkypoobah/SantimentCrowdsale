@@ -19,6 +19,8 @@ pragma solidity ^0.4.11;
 /// @author Santiment GmbH
 /// @title  CrowdsaleMinter
 
+import "./Base.sol";
+
 contract BalanceStorage {
     function balances(address account) public returns(uint balance);
 }
@@ -35,40 +37,31 @@ contract PresaleBonusVoting {
     function rawVotes(address addr) public returns (uint rawVote);
 }
 
-contract MintableToken {
-    //target token contract is responsible to accept only authorised mint calls.
-    function mint(uint amount, address account);
-
-    //start the token on minting finished,
-    function start();
-}
-
-contract CrowdsaleMinter {
+contract CrowdsaleMinter is Owned {
 
     string public constant VERSION = "0.2.0";
 
     /* ====== configuration START ====== */
-    uint public constant COMMUNITY_SALE_START = 91;
-    uint public constant PRIORITY_SALE_START  = 96;
-    uint public constant PUBLIC_SALE_START    = 101;
-    uint public constant PUBLIC_SALE_END      = 106;
-    uint public constant WITHDRAWAL_END       = 111;
+    uint public constant COMMUNITY_SALE_START = ;
+    uint public constant PRIORITY_SALE_START  = ;
+    uint public constant PUBLIC_SALE_START    = ;
+    uint public constant PUBLIC_SALE_END      = ;
+    uint public constant WITHDRAWAL_END       = ;
 
-    address public constant OWNER = 0xa11aae29840fbb5c86e6fd4cf809eba183aef433;
-    address public constant ADMIN = 0xa22ab8a9d641ce77e06d98b7d7065d324d3d6976;
+    address public constant owner = 0x00000000000000000000000000;
 
     address public constant TEAM_GROUP_WALLET           = 0xa33a6c312d9ad0e0f2e95541beed0cc081621fd0;
     address public constant ADVISERS_AND_FRIENDS_WALLET = 0xa44a08d3f6933c69212114bb66e2df1813651844;
 
-    uint public constant TEAM_BONUS_PER_CENT           = 18;
+    uint public constant TEAM_BONUS_PER_CENT            = 18;
     uint public constant ADVISORS_AND_PARTNERS_PER_CENT = 10;
 
-    MintableToken      public TOKEN                    = MintableToken(0x936e75a404fc4ea6aba4d9c3b20ea67abab3188a);
+    MintableToken      public TOKEN                    = MintableToken();
 
-    AddressList        public PRIORITY_ADDRESS_LIST    = AddressList(0x0a91add9e3e97057980da7826043aab2a2d4c35b);
-    MinMaxWhiteList    public COMMUNITY_ALLOWANCE_LIST = MinMaxWhiteList(0x821ca8becdbfb00ca55e722908796a375bc2d538);
-    BalanceStorage     public PRESALE_BALANCES         = BalanceStorage(0xb8c31f47dfba40162326aba12cd577ae5cb2ce99);
-    PresaleBonusVoting public PRESALE_BONUS_VOTING     = PresaleBonusVoting(0x8b97d31ff6bfc0c2fd7a0fff69d6b4bd485a832b);
+    AddressList        public PRIORITY_ADDRESS_LIST    = AddressList();
+    MinMaxWhiteList    public COMMUNITY_ALLOWANCE_LIST = MinMaxWhiteList();
+    BalanceStorage     public PRESALE_BALANCES         = BalanceStorage();
+    PresaleBonusVoting public PRESALE_BONUS_VOTING     = PresaleBonusVoting();
 
     uint public constant COMMUNITY_PLUS_PRIORITY_SALE_CAP_ETH = 45000;
     uint public constant MIN_TOTAL_AMOUNT_TO_RECEIVE_ETH = 15000;
@@ -78,7 +71,33 @@ contract CrowdsaleMinter {
     uint public constant PRE_SALE_BONUS_PER_CENT = 54;
 
     //constructor
-    function CrowdsaleMinter() validSetupOnly() {}
+    function CrowdsaleMinter() {
+        //check configuration if something in setup is looking weird
+        if (
+            TOKEN_PER_ETH == 0
+            || MIN_ACCEPTED_AMOUNT_FINNEY < 1
+            || owner == 0x0
+            || address(COMMUNITY_ALLOWANCE_LIST) == 0x0
+            || address(PRIORITY_ADDRESS_LIST) == 0x0
+            || address(PRESALE_BONUS_VOTING) == 0x0
+            || address(PRESALE_BALANCES) == 0x0
+            || COMMUNITY_SALE_START == 0
+            || PRIORITY_SALE_START == 0
+            || PUBLIC_SALE_START == 0
+            || PUBLIC_SALE_END == 0
+            || WITHDRAWAL_END == 0
+            || MIN_TOTAL_AMOUNT_TO_RECEIVE == 0
+            || MAX_TOTAL_AMOUNT_TO_RECEIVE == 0
+            || COMMUNITY_PLUS_PRIORITY_SALE_CAP == 0
+            || COMMUNITY_SALE_START <= block.number
+            || COMMUNITY_SALE_START >= PRIORITY_SALE_START
+            || PRIORITY_SALE_START >= PUBLIC_SALE_START
+            || PUBLIC_SALE_START >= PUBLIC_SALE_END
+            || PUBLIC_SALE_END >= WITHDRAWAL_END
+            || COMMUNITY_PLUS_PRIORITY_SALE_CAP > MAX_TOTAL_AMOUNT_TO_RECEIVE
+            || MIN_TOTAL_AMOUNT_TO_RECEIVE > MAX_TOTAL_AMOUNT_TO_RECEIVE )
+        throw;
+    }
 
     /* ====== configuration END ====== */
 
@@ -156,10 +175,10 @@ contract CrowdsaleMinter {
     function withdrawFundsAndStartToken() external
     inState(State.WITHDRAWAL_RUNNING)
     noReentrancy
-    onlyOwner
+    only(owner)
     {
         // transfer funds to owner
-        if (!OWNER.send(this.balance)) throw;
+        if (!owner.send(this.balance)) throw;
 
         //notify token contract to start
         if (TOKEN.call(bytes4(sha3("start()")))) {
@@ -174,7 +193,7 @@ contract CrowdsaleMinter {
     function mintAllBonuses() external
     inState(State.BONUS_MINTING)
     noReentrancy
-    //onlyAdmin     //ToDo: think about possibe attac vector if this func is public. It must be public because bonus holder should be able call it.
+    //only(owner)     //ToDo: think about possibe attac vector if this func is public. It must be public because bonus holder should be able call it.
     {
         assert(!allBonusesAreMinted);
         allBonusesAreMinted = true;
@@ -205,14 +224,14 @@ contract CrowdsaleMinter {
 
     function attachToToken(MintableToken tokenAddr) external
     inState(State.BEFORE_START)
-    onlyAdmin
+    only(owner)
     {
         TOKEN = tokenAddr;
     }
 
     function abort() external
     inStateBefore(State.REFUND_RUNNING)
-    onlyAdmin
+    only(owner)
     {
         isAborted = true;
     }
@@ -298,48 +317,6 @@ contract CrowdsaleMinter {
         _;
     }
 
-    //fails if something in setup is looking weird
-    modifier validSetupOnly() {
-        if (
-            TOKEN_PER_ETH == 0
-            || MIN_ACCEPTED_AMOUNT_FINNEY < 1
-            || OWNER == 0x0
-            || address(COMMUNITY_ALLOWANCE_LIST) == 0x0
-            || address(PRIORITY_ADDRESS_LIST) == 0x0
-            || address(PRESALE_BONUS_VOTING) == 0x0
-            || address(PRESALE_BALANCES) == 0x0
-            || COMMUNITY_SALE_START == 0
-            || PRIORITY_SALE_START == 0
-            || PUBLIC_SALE_START == 0
-            || PUBLIC_SALE_END == 0
-            || WITHDRAWAL_END == 0
-            || MIN_TOTAL_AMOUNT_TO_RECEIVE == 0
-            || MAX_TOTAL_AMOUNT_TO_RECEIVE == 0
-            || COMMUNITY_PLUS_PRIORITY_SALE_CAP == 0
-            || COMMUNITY_SALE_START <= block.number
-            || COMMUNITY_SALE_START >= PRIORITY_SALE_START
-            || PRIORITY_SALE_START >= PUBLIC_SALE_START
-            || PUBLIC_SALE_START >= PUBLIC_SALE_END
-            || PUBLIC_SALE_END >= WITHDRAWAL_END
-            || COMMUNITY_PLUS_PRIORITY_SALE_CAP > MAX_TOTAL_AMOUNT_TO_RECEIVE
-            || MIN_TOTAL_AMOUNT_TO_RECEIVE > MAX_TOTAL_AMOUNT_TO_RECEIVE )
-                throw;
-        _;
-    }
-
-
-    //accepts calls from Admin only
-    modifier onlyAdmin(){
-        if (msg.sender != ADMIN)  throw;
-        _;
-    }
-
-    //accepts calls from owner only
-    modifier onlyOwner(){
-        if (msg.sender != OWNER)  throw;
-        _;
-    }
-
     //accepts calls from token holders only
     modifier tokenHoldersOnly(){
         if (balances[msg.sender] == 0) throw;
@@ -351,16 +328,6 @@ contract CrowdsaleMinter {
     modifier notTooSmallAmountOnly(){
         if (msg.value < MIN_ACCEPTED_AMOUNT) throw;
         _;
-    }
-
-
-    //prevents reentrancy attacs
-    bool private locked = false;
-    modifier noReentrancy() {
-        if (locked) throw;
-        locked = true;
-        _;
-        locked = false;
     }
 
     //
