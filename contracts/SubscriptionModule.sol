@@ -43,6 +43,7 @@ contract PaymentListener {
 ///
 /// The default XRateProvider (with id==0) defines exchange rate 1:1 and represents exchange rate of SAN token to itself.
 /// this provider is set by defalult and thus the subscription becomes nominated in SAN.
+//
 contract XRateProvider {
 
     //@dev returns current exchange rate (in form of a simple fraction) from other currency to SAN (f.e. ETH:SAN).
@@ -85,12 +86,13 @@ contract SubscriptionBase {
 
     event NewSubscription(address customer, address service, uint offerId, uint subId);
     event NewDeposit(uint depositId, uint value, address sender);
-    event NewXRateProvider(address addr, uint16 xRateProviderId);
-    event DepositClosed(uint depositId);
-    event OfferOnHold(uint offerId, bool onHold);
-    event OfferCanceled(uint offerId);
-    event SubOnHold(uint offerId, bool onHold);
-    event SubCanceled(uint subId);
+    event NewXRateProvider(address addr, uint16 xRateProviderId, address sender);
+    event DepositReturned(uint depositId, address returnedTo);
+    event SubscriptionDepositReturned(uint subId, uint amount, address returnedTo, address sender);
+    event OfferOnHold(uint offerId, bool onHold, address sender);
+    event OfferCanceled(uint offerId, address sender);
+    event SubOnHold(uint offerId, bool onHold, address sender);
+    event SubCanceled(uint subId, address sender);
 
 }
 
@@ -98,9 +100,15 @@ contract SubscriptionBase {
 contract SubscriptionModule is SubscriptionBase, Base {
     function attachToken(address token) public;
 
+    ///@dev the same like transfer methods, but with recipient's notification
+    ///@param _value amount to transfer
+    ///@param _paymentData is a payment descriptor evaluated by PaymentListener
+    ///@param _to PaymentListener becomes notified and has chance to evaluate incoming payment and reject it.
     function paymentTo(uint _value, bytes _paymentData, PaymentListener _to) public returns (bool success);
     function paymentFrom(uint _value, bytes _paymentData, address _from, PaymentListener _to) public returns (bool success);
 
+    ///@dev creates subscription offer.
+    ///@dev all times  denominated in currency given by XrateProvider.
     function createSubscriptionOffer(uint _price, uint16 _xrateProviderId, uint _chargePeriod, uint _expireOn, uint _offerLimit, uint _depositValue, uint _startOn, bytes _descriptor) public returns (uint subId);
     function updateSubscriptionOffer(uint offerId, uint _offerLimit) public;
     function acceptSubscriptionOffer(uint _offerId, uint _expireOn, uint _startOn) public returns (uint newSubId);
@@ -111,11 +119,11 @@ contract SubscriptionModule is SubscriptionBase, Base {
     function executeSubscription(uint subId) public returns (bool success);
     function postponeDueDate(uint subId, uint newDueDate) public returns (bool success);
     function currentStatus(uint subId) public constant returns(Status status);
-    function forceArchiveSubscription(uint subId) external;
+    function returnSubscriptionDesposit(uint subId) external;
 
     function holdSubscriptionOffer(uint offerId) public returns (bool success);
     function unholdSubscriptionOffer(uint offerId) public returns (bool success);
-    function cancelSubscriptionOffer(uint offerId) public returns(bool);
+    function cancelSubscriptionOffer(uint offerId) public returns (bool);
 
     function paybackSubscriptionDeposit(uint subId);
     function createDeposit(uint _value, bytes _descriptor) public returns (uint subId);
@@ -146,7 +154,7 @@ contract SubscriptionModule is SubscriptionBase, Base {
 
     enum PaymentStatus {OK, BALANCE_ERROR, APPROVAL_ERROR}
 
-    event Payment(address _from, address _to, uint _value, uint _fee, address caller, PaymentStatus status, uint subId);
+    event Payment(address _from, address _to, uint _value, uint _fee, address sender, PaymentStatus status, uint subId);
 
 }
 
@@ -217,7 +225,7 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
     function registerXRateProvider(XRateProvider addr) external only(owner) returns (uint16 xrateProviderId) {
         xrateProviderId = uint16(xrateProviders.length);
         xrateProviders.push(addr);
-        NewXRateProvider(addr, xrateProviderId);
+        NewXRateProvider(addr, xrateProviderId, msg.sender);
     }
 
     function getXRateProviderLength() external constant returns (uint) { return xrateProviders.length; }
@@ -264,11 +272,11 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         Subscription storage sub = subscriptions[subId];
         assert (_isNotOffer(sub));
         assert (sub.transferTo == msg.sender); //only Service Provider is allowed to postpone the DueDate
-        if (sub.paidUntil >= newDueDate) { return false; }
-        else {
+        if (sub.paidUntil < newDueDate) {
             sub.paidUntil = newDueDate;
             return true;
-        }
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
     }
 
     function currentStatus(uint subId) public constant returns(Status status) {
@@ -293,7 +301,22 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         }
     }
 
-    function createSubscriptionOffer(uint _price, uint16 _xrateProviderId, uint _chargePeriod, uint _expireOn, uint _offerLimit, uint _depositAmount, uint _startOn, bytes _descriptor)
+
+    ///@notice create a new subscription offer.
+    ///@dev only registered service provider is allowed to create offers.
+    ///@dev subscription uses SAN token for payment, but an exact amount to be paid or deposit is calculated using exchange rate from external xrateProvider (previosly registered on platform).
+    ///    This allows to create a subscription bound to another token or even fiat currency.
+    ///@param _pricePerHour - subscription price per hour in SAN
+    ///@param _xrateProviderId - id of external exchange rate provider from subscription currency to SAN; "0" means subscription is priced in SAN natively.
+    ///@param _chargePeriod - time period to charge; subscription can't be charged more often than this period. Time units are native ethereum time, returning by `now`, i.e. seconds.
+    ///@param _expireOn - offer can't be accepted after this time.
+    ///@param _offerLimit - how many subscription are available to created from this offer; there is no magic number for unlimited offer -- use big number instead.
+    ///@param _depositAmount - upfront deposit required for creating a subscription; this deposit becomes fully returned on subscription is over.
+    ///       currently this deposit is not subject of platform fees and will be refunded in full. Next versions of this module can use deposit in case of outstanding payments.
+    ///@param _startOn - a subscription from this offer can't be created before this time. Time units are native ethereum time, returning by `now`, i.e. seconds.
+    ///@param _descriptor - arbitrary bytes as an offer descriptor. This descriptor is copied into subscription and then service provider becomes it passed in notifications.
+    //
+    function createSubscriptionOffer(uint _pricePerHour, uint16 _xrateProviderId, uint _chargePeriod, uint _expireOn, uint _offerLimit, uint _depositAmount, uint _startOn, bytes _descriptor)
     public
     onlyRegisteredProvider
     returns (uint subId) {
@@ -302,132 +325,194 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         var (_xrate_n, _xrate_d) = _xrateProviderId == 0 ? (1,1) : XRateProvider(xrateProviders[_xrateProviderId]).getRate();
         assert (_xrate_n > 0 && _xrate_d > 0);
         subscriptions[++subscriptionCounter] = Subscription ({
-            transferFrom    : 0,
-            transferTo      : msg.sender,
-            pricePerHour    : _price,
-            xrateProviderId : _xrateProviderId,
-            initialXrate_n  : _xrate_n,
-            initialXrate_d  : _xrate_d,
-            paidUntil       : 0,
-            chargePeriod    : _chargePeriod,
-            depositAmount   : _depositAmount,
+            transferFrom    : 0,                  // empty transferFrom field means we have an offer, not a subscription
+            transferTo      : msg.sender,         // service provider is a beneficiary of subscripton payments
+            pricePerHour    : _pricePerHour,      // price per hour in SAN (recalculated from base currency if needed)
+            xrateProviderId : _xrateProviderId,   // id of registered exchange rate provider or zero if an offer is nominated in SAN.
+            initialXrate_n  : _xrate_n,           // fraction nominator of the initial exchange rate
+            initialXrate_d  : _xrate_d,           // fraction denominator of the initial exchange rate
+            paidUntil       : 0,                  // service is considered to be paid until this time; no charge is possible while subscription is paid for now.
+            chargePeriod    : _chargePeriod,      // period in seconds (ethereum block time unit) to charge.
+            depositAmount   : _depositAmount,     // deposit required for subscription accept.
             startOn         : _startOn,
             expireOn        : _expireOn,
             execCounter     : _offerLimit,
             descriptor      : _descriptor,
-            onHoldSince     : 0
+            onHoldSince     : 0                   // offer is not on hold by default.
         });
-        return subscriptionCounter;
+        return subscriptionCounter;               // returns an id of the new offer.
     }
 
+
+    ///@notice updates currently available number of subscription for this offer.
+    ///        Other offer's parameter can't be updated because they are considered to be a public offer reviewed by customers.
+    ///        The service provider should recreate the offer as a new one in case of other changes.
+    //
     function updateSubscriptionOffer(uint _offerId, uint _offerLimit) {
         Subscription storage offer = subscriptions[_offerId];
+        assert (_isOffer(offer));
         assert (offer.transferTo == msg.sender); //only Provider is allowed to update the offer.
         offer.execCounter = _offerLimit;
     }
 
+
+    ///@notice accept given offer and create a new subscription on the base of it.
+    ///
+    ///@dev the service provider (offer.`transferTo`) becomes notified about new subscription by call `onSubNew(newSubId, _offerId)`.
+    ///     It is provider's responsibility to retrieve and store any necessary information about offer and this new subscription. Some of info is only available at this point.
+    ///     The Service Provider can also reject the new subscription by throwing an exception or returning `false` from `onSubNew(newSubId, _offerId)` event handler.
+    ///@param _offerId   - id of the offer to be accepted
+    ///@param _expireOn  - subscription expiration time; no charges are possible behind this time.
+    ///@param _startOn   - subscription start time; no charges are possible before this time.
+    ///                    If the `_startOn` is in the past or is zero, it means start the subscription ASAP.
+    //
     function acceptSubscriptionOffer(uint _offerId, uint _expireOn, uint _startOn) public returns (uint newSubId) {
         assert (_startOn < _expireOn);
         Subscription storage offer = subscriptions[_offerId];
         assert (_isOffer(offer));
-        assert(offer.startOn == 0     || offer.startOn <= now);
-        assert(offer.expireOn == 0    || offer.expireOn > now);
-        assert(offer.onHoldSince == 0);
-        assert(offer.execCounter > 0);
-        --offer.execCounter;
+        assert (offer.startOn == 0     || offer.startOn  <= now);
+        assert (offer.expireOn == 0    || offer.expireOn >= now);
+        assert (offer.onHoldSince == 0);
+        assert (offer.execCounter > 0);
         newSubId = subscriptionCounter + 1;
         //create a clone of the offer...
         Subscription storage newSub = subscriptions[newSubId] = offer;
         //... and adjust some fields specific to subscription
         newSub.transferFrom = msg.sender;
         newSub.execCounter = 0;
-        newSub.paidUntil = newSub.startOn = max(_startOn, now);
+        newSub.paidUntil = newSub.startOn = max(_startOn, now);     //no debts before actual creation time!
         newSub.expireOn = _expireOn;
         newSub.depositAmount = _applyXchangeRate(newSub.depositAmount, newSub);
-        //depositAmount is already stored in the sub, so burn the same amount from customer's account.
+        //depositAmount is now stored in the sub, so burn the same amount from customer's account.
         assert (san._burnForDeposit(msg.sender, newSub.depositAmount));
+        assert (PaymentListener(newSub.transferTo).onSubNew(newSubId, _offerId)); //service provider can still reject the new subscription here
+
         NewSubscription(newSub.transferFrom, newSub.transferTo, _offerId, newSubId);
-        assert (PaymentListener(newSub.transferTo).onSubNew(newSubId, _offerId));
+        --offer.execCounter;
         return (subscriptionCounter = newSubId);
     }
 
-    function cancelSubscriptionOffer(uint offerId) public returns(bool) {
+
+    ///@notice cancel an offer given by `offerId`.
+    ///@dev sets offer.`expireOn` to `expireOn`.
+    //
+    function cancelSubscriptionOffer(uint offerId) public returns (bool) {
         Subscription storage offer = subscriptions[offerId];
         assert (_isOffer(offer));
-        assert (offer.transferTo == msg.sender || owner == msg.sender); //only service provider or owner is allowed to cancel the offer
+        assert (offer.transferTo == msg.sender || owner == msg.sender); //only service provider or platform owner is allowed to cancel the offer
         if (offer.expireOn>now){
             offer.expireOn = now;
-            OfferCanceled(offerId);
+            OfferCanceled(offerId, msg.sender);
             return true;
-        } else {return false;}
-    }
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
+  }
 
+
+    ///@notice cancel an subscription given by `subId` (a graceful version).
+    ///@notice IMPORTANT: a malicious service provider can consume all gas and preventing subscription from cancellation.
+    ///        If so, use `cancelSubscription(uint subId, uint gasReserve)` as the forced version.
+    ///         see `cancelSubscription(uint subId, uint gasReserve)` for more documentation.
+    //
     function cancelSubscription(uint subId) public {
         return cancelSubscription(subId, 0);
     }
 
+
+    ///@notice cancel an subscription given by `subId` (a forced version).
+    ///        Cancellation means no further charges to this subscription are possible. The provided subscription deposit can be withdrawn only `paidUntil` period is over.
+    ///        Depending on nature of the service provided, the service provider can allow an immediate deposit withdrawal by `returnSubscriptionDesposit(uint subId)` call, but its on his own.
+    ///        In some business cases a deposit must remain locked until `paidUntil` period is over even, the subscription is already canceled.
+    ///@notice gasReserve is a gas amount reserved for contract execution AFTER service provider becomes `onSubCanceled(uint256,address)` notification.
+    ///        It guarantees, that cancellation becomes executed even a (malicious) service provider consumes all gas provided.
+    ///        If so, use `cancelSubscription(uint subId, uint gasReserve)` as the forced version.
+    ///        This difference is because the customer must always have a possibility to cancel his contract even the service provider disagree on cancellation.
+    ///@param subId - subscription to be cancelled
+    ///@param gasReserve - gas reserved for call finalization (minimum reservation is 10000 gas)
+    //
     function cancelSubscription(uint subId, uint gasReserve) public {
         Subscription storage sub = subscriptions[subId];
-        assert (sub.transferFrom == msg.sender || owner == msg.sender); //only subscription owner or owner is allowed to cancel it
+        assert (sub.transferFrom == msg.sender || owner == msg.sender); //only subscription owner or platform owner is allowed to cancel it
         assert (_isNotOffer(sub));
         var _to = sub.transferTo;
         sub.expireOn = max(now, sub.paidUntil);
         if (msg.sender != _to) {
             //supress re-throwing of exceptions; reserve enough gas to finish this function
-            if (_to.call.gas(msg.gas-max(gasReserve,10000))(bytes4(sha3("onSubCanceled(uint256,address)")), subId, msg.sender)){
+            gasReserve = max(gasReserve,10000);  //reserve minimum 10000 gas
+            assert (msg.gas > gasReserve);       //sanity check
+            if (_to.call.gas(msg.gas-gasReserve)(bytes4(sha3("onSubCanceled(uint256,address)")), subId, msg.sender)){
                 //do nothing. it is notification only.
-                //Later: is it possible to evaluate return value here? We need to in order to
+                //Later: is it possible to evaluate return value here? If is better to return the subscription deposit here.
             }
         }
-        SubCanceled(subId);
+        SubCanceled(subId, msg.sender);
     }
 
-    function forceArchiveSubscription(uint subId) external {
+
+    ///@notice can be called by provider on CANCELED subscription to return a subscription deposit to customer immediately.
+    ///        Customer can anyway collect his deposit after `paidUntil` period is over.
+    ///@param subId - subscription holding the deposit
+    function returnSubscriptionDesposit(uint subId) external {
         Subscription storage sub = subscriptions[subId];
-        assert (_currentStatus(sub) == Status.CANCELED);
-        assert (sub.transferTo == msg.sender); //only provider is allowed to force expire a canceled sub.
         assert (_isNotOffer(sub));
+        assert (_currentStatus(sub) == Status.CANCELED);
+        assert (sub.depositAmount > 0); //sanity check
+        assert (sub.transferTo == msg.sender || owner == msg.sender); //only subscription owner or platform owner is allowed to release deposit.
         sub.expireOn = now;
-        _returnSubscriptionDespoit(sub);
+        _returnSubscriptionDesposit(subId, sub);
     }
 
+
+    ///@notice called by customer on EXPIRED subscription (`paidUntil` period is over) to collect a subscription deposit.
+    ///        Customer can anyway collect his deposit after `paidUntil` period is over.
+    ///@param subId - subscription holding the deposit
     function claimSubscriptionDeposit(uint subId) public {
         Subscription storage sub = subscriptions[subId];
         assert (_currentStatus(sub) == Status.EXPIRED);
         assert (sub.transferFrom == msg.sender);
         assert (sub.depositAmount > 0);
         assert (_isNotOffer(sub));
-        _returnSubscriptionDespoit(sub);
+        _returnSubscriptionDesposit(subId, sub);
     }
 
-    function _returnSubscriptionDespoit(Subscription storage sub) internal {
+
+    //@dev returns subscription deposit to customer
+    function _returnSubscriptionDesposit(uint subId, Subscription storage sub) internal {
         uint depositAmount = sub.depositAmount;
         sub.depositAmount = 0;
-        san._mintFromDeposit(msg.sender, depositAmount);
+        san._mintFromDeposit(sub.transferFrom, depositAmount);
+        SubscriptionDepositReturned(subId, depositAmount, sub.transferFrom, msg.sender);
     }
 
-    // place an active offer on hold
+
+    ///@notice place an active offer on hold; it means no subscriptions can be created from this offer.
+    ///        Only service provider (or platform owner) is allowed to hold/unhold a subscription offer.
+    ///@param offerId - id of the offer to be placed on hold.
     function holdSubscriptionOffer(uint offerId) public returns (bool success) {
         Subscription storage offer = subscriptions[offerId];
         assert (_isOffer(offer));
         require (msg.sender == offer.transferTo || msg.sender == owner); //only owner or service provider can place the offer on hold.
         if (offer.onHoldSince == 0) {
             offer.onHoldSince = now;
-            OfferOnHold(offerId, true);
+            OfferOnHold(offerId, true, msg.sender);
             return true;
-        } else { return false; }
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
     }
 
-    // resume currently on-hold offer.
+    ///@notice resume on-hold offer; subscriptions can be created from this offer again (if other conditions are met).
+    ///        Only service provider (or platform owner) is allowed to hold/unhold a subscription offer.
+    ///@param offerId - id of the offer to be resumed.
     function unholdSubscriptionOffer(uint offerId) public returns (bool success) {
         Subscription storage offer = subscriptions[offerId];
         assert (_isOffer(offer));
         require (msg.sender == offer.transferTo || msg.sender == owner); //only owner or service provider can reactivate the offer.
         if (offer.onHoldSince > 0) {
             offer.onHoldSince = 0;
-            OfferOnHold(offerId, false);
+            OfferOnHold(offerId, false, msg.sender);
             return true;
-        } else { return false; }
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
     }
 
     // a service can allow/disallow a hold/unhold request
@@ -438,9 +523,10 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         var _to = sub.transferTo;
         if (msg.sender == _to || PaymentListener(_to).onSubUnHold(subId, msg.sender, true)) {
             sub.onHoldSince = now;
-            SubOnHold(subId, true);
+            SubOnHold(subId, true, msg.sender);
             return true;
-        } else { return false; }
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
     }
 
     // a service can allow/disallow a hold/unhold request
@@ -452,9 +538,10 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         if (msg.sender == _to || PaymentListener(_to).onSubUnHold(subId, msg.sender, false)) {
             sub.paidUntil += now - sub.onHoldSince;
             sub.onHoldSince = 0;
-            SubOnHold(subId, false);
+            SubOnHold(subId, false, msg.sender);
             return true;
-        } else { return false; }
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
     }
 
     function createDeposit(uint _value, bytes _descriptor) public returns (uint subId) {
@@ -475,14 +562,14 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         san._mintFromDeposit(sub.transferFrom, depositAmount);
     }
 
-    function _createDeposit(address owner, uint _value, bytes _descriptor) internal returns (uint depositId) {
-        assert (san._burnForDeposit(owner,_value));
+    function _createDeposit(address _owner, uint _value, bytes _descriptor) internal returns (uint depositId) {
+        assert (san._burnForDeposit(_owner,_value));
         deposits[++depositCounter] = Deposit ({
-            owner : owner,
+            owner : _owner,
             value : _value,
             descriptor : _descriptor
         });
-        NewDeposit(depositCounter, _value, owner);
+        NewDeposit(depositCounter, _value, _owner);
         return depositCounter;
     }
 
@@ -490,7 +577,7 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         if (deposits[depositId].owner == returnTo) {
             san._mintFromDeposit(returnTo, deposits[depositId].value);
             delete deposits[depositId];
-            DepositClosed(depositId);
+            DepositReturned(depositId, returnTo);
         } else { throw; }
     }
 
