@@ -15,6 +15,8 @@ import "./ERC20.sol";
 // 5 - check: all function for re-entrancy
 // 6 - check: all _paymentData
 // 7 - check Cancel/Hold/Unhold Offer functionality
+// 8 - validate linking modules and deployment process: attachToken(address token) public
+// 9 - validate function currentStatus(uint subId) public constant
 //ToDo later:
 // 0 - embed force archive subscription into sub cancellation.
 //     (Currently difficult/impossible because low level call is missing return value)
@@ -22,12 +24,36 @@ import "./ERC20.sol";
 //Ask:
 // Given: subscription one year:
 
+
+///@dev an interface to implement by Service Provider contract to be notified about subscription changes (in-Tx notification).
+///     see alse EVM events logged by subscription module.
+//
 contract PaymentListener {
 
+    ///@dev called to post-approve/reject incoming single payment.
+    ///@return `false` causes an exception and reverts the payment.
+    //
     function onPayment(address _from, uint _value, bytes _paymentData) returns (bool);
+
+    ///@dev called to post-approve/reject subscription charge.
+    ///@return `false` causes an exception and reverts the operation.
+    //
     function onSubExecuted(uint subId) returns (bool);
+
+    ///@dev called to post-approve/reject a creation of the subscription.
+    ///@return `false` causes an exception and reverts the operation.
+    //
     function onSubNew(uint newSubId, uint offerId) returns (bool);
+
+    ///@dev called to notify service provider about subscription cancellation.
+    ///     Provider is not able to prevent the cancellation.
+    ///@return <<reserved for future implementation>>
+    //
     function onSubCanceled(uint subId, address caller) returns (bool);
+
+    ///@dev called to notify service provider about subscription got hold/unhold.
+    ///@return `false` causes an exception and reverts the operation.
+    //
     function onSubUnHold(uint subId, address caller, bool isOnHold) returns (bool);
 
 }
@@ -47,7 +73,7 @@ contract PaymentListener {
 contract XRateProvider {
 
     //@dev returns current exchange rate (in form of a simple fraction) from other currency to SAN (f.e. ETH:SAN).
-    //@dev fraction numbers are restricted to uint16 to prevent overflow by calculation;
+    //@dev fraction numbers are restricted to uint16 to prevent overflow in calculations;
     function getRate() returns (uint32 /*nominator*/, uint32 /*denominator*/);
 
     //@dev provides a code for another currency, f.e. "ETH" or "USD"
@@ -55,9 +81,9 @@ contract XRateProvider {
 }
 
 
-//@notice data structure for SubscriptionModule
+//@dev data structure for SubscriptionModule
 contract SubscriptionBase {
-    enum Status {OFFER, PAID, CHARGEABLE, ON_HOLD, CANCELED, EXPIRED, ARCHIVED}
+    enum Status {NOT_EXIST, OFFER, PAID, CHARGEABLE, ON_HOLD, CANCELED, EXPIRED, ARCHIVED}
 
     //@dev subscription and subscription offer use the same structure. Offer is technically a template for subscription.
     struct Subscription {
@@ -96,19 +122,19 @@ contract SubscriptionBase {
 
 }
 
-///@dev interface for SubscriptionModule
+///@dev an Interface for SubscriptionModule.
+///     extracted here for better overview.
+///     see detailed documentation in implementation module.
 contract SubscriptionModule is SubscriptionBase, Base {
+
+    ///@dev ***** module configuration *****
     function attachToken(address token) public;
 
-    ///@dev the same like transfer methods, but with recipient's notification
-    ///@param _value amount to transfer
-    ///@param _paymentData is a payment descriptor evaluated by PaymentListener
-    ///@param _to PaymentListener becomes notified and has chance to evaluate incoming payment and reject it.
+    ///@dev ***** single payment handling *****
     function paymentTo(uint _value, bytes _paymentData, PaymentListener _to) public returns (bool success);
     function paymentFrom(uint _value, bytes _paymentData, address _from, PaymentListener _to) public returns (bool success);
 
-    ///@dev creates subscription offer.
-    ///@dev all times  denominated in currency given by XrateProvider.
+    ///@dev ***** subscription handling *****
     function createSubscriptionOffer(uint _price, uint16 _xrateProviderId, uint _chargePeriod, uint _expireOn, uint _offerLimit, uint _depositValue, uint _startOn, bytes _descriptor) public returns (uint subId);
     function updateSubscriptionOffer(uint offerId, uint _offerLimit) public;
     function acceptSubscriptionOffer(uint _offerId, uint _expireOn, uint _startOn) public returns (uint newSubId);
@@ -120,18 +146,26 @@ contract SubscriptionModule is SubscriptionBase, Base {
     function postponeDueDate(uint subId, uint newDueDate) public returns (bool success);
     function currentStatus(uint subId) public constant returns(Status status);
     function returnSubscriptionDesposit(uint subId) external;
+    function claimSubscriptionDeposit(uint subId) external;
 
+    ///@dev ***** subscription offer handling *****
     function holdSubscriptionOffer(uint offerId) public returns (bool success);
     function unholdSubscriptionOffer(uint offerId) public returns (bool success);
     function cancelSubscriptionOffer(uint offerId) public returns (bool);
 
-    function paybackSubscriptionDeposit(uint subId);
+    ///@dev ***** simple deposit handling *****
     function createDeposit(uint _value, bytes _descriptor) public returns (uint subId);
     function claimDeposit(uint depositId) public;
+
+    ///@dev ***** ExchangeRate provider *****
     function registerXRateProvider(XRateProvider addr) external returns (uint16 xrateProviderId);
+
+    ///@dev ***** Service provider (payment receiver) *****
     function enableServiceProvider(PaymentListener addr) external;
     function disableServiceProvider(PaymentListener addr) external;
 
+
+    ///@dev ***** convenience subscription getter *****
     function subscriptionDetails(uint subId) external constant returns(
         address transferFrom,
         address transferTo,
@@ -153,49 +187,141 @@ contract SubscriptionModule is SubscriptionBase, Base {
     );
 
     enum PaymentStatus {OK, BALANCE_ERROR, APPROVAL_ERROR}
-
     event Payment(address _from, address _to, uint _value, uint _fee, address sender, PaymentStatus status, uint subId);
 
-}
+} //SubscriptionModule
+
+
 
 //@dev implementation
 contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
 
-    uint public PLATFORM_FEE_PER_10000 = 1; //0,01%
-    uint public totalOnDeposit;
-    uint public totalInCirculation;
+    // *************************************************
+    // *              contract states                  *
+    // *************************************************
+
+    ///@dev list of all registered service provider contracts impelmented as a map for better lookup.
+    mapping (address=>bool) public providerRegistry;
+
+    ///@dev all subscriptions and offers (incl. ARCHIVED).
+    mapping (uint => Subscription) public subscriptions;
+
+    ///@dev all active simple deposits gived by depositId.
+    mapping (uint => Deposit) public deposits;
+
+    ///@dev addresses of registered exchange rate providers.
+    XRateProvider[] public xrateProviders;
+
+    ///@dev ongoing counter for subscription ids starting from 1.
+    ///     Current value represents an id of last created subscription.
+    uint public subscriptionCounter = 0;
+
+    ///@dev ongoing counter for simple deposit ids starting from 1.
+    ///     Current value represents an id of last created deposit.
+    uint public depositCounter = 0;
+
+    ///@dev Token contract with ERC20ModuleSupport addon.
+    ///     Subscription Module operates on its balances via ERC20ModuleSupport interface as trusted module.
     ERC20ModuleSupport san;
 
-    function SubscriptionModuleImpl() {
-        owner = msg.sender;
-        xrateProviders.push(XRateProvider(this));
-    }
 
-    // ------------------------------------------------------------------------
-    // Don't accept ethers
-    // ------------------------------------------------------------------------
+
+    // *************************************************
+    // *     reject all ether sent to this contract    *
+    // *************************************************
     function () {
         throw;
     }
 
+
+
+    // *************************************************
+    // *            setup and configuration            *
+    // *************************************************
+
+    ///@dev constructor
+    function SubscriptionModuleImpl() {
+        owner = msg.sender;
+        xrateProviders.push(XRateProvider(this)); //this is a default SAN:SAN (1:1) provider with default id == 0
+    }
+
+
+    ///@dev attach SAN token to work with; can be done only once.
     function attachToken(address token) public {
         assert(address(san) == 0); //only in new deployed state
         san = ERC20ModuleSupport(token);
     }
 
-    function setPlatformFeePer10000(uint newFee) external only(owner) {
-        require (newFee <= 10000); //formally maximum fee is 100% (completely insane but technically possible)
-        PLATFORM_FEE_PER_10000 = newFee;
-    }
 
+    ///@dev register a new service provider to the platform.
     function enableServiceProvider(PaymentListener addr) external only(owner) {
         providerRegistry[addr] = true;
     }
 
+
+    ///@dev de-register the service provider with given `addr`.
     function disableServiceProvider(PaymentListener addr) external only(owner) {
         delete providerRegistry[addr];
     }
 
+
+    ///@dev register new exchange rate provider.
+    ///     XRateProvider can't be de-registered, because they could be still in use by some subscription.
+    function registerXRateProvider(XRateProvider addr) external only(owner) returns (uint16 xrateProviderId) {
+        xrateProviderId = uint16(xrateProviders.length);
+        xrateProviders.push(addr);
+        NewXRateProvider(addr, xrateProviderId, msg.sender);
+    }
+
+
+    ///@dev xrateProviders length accessor.
+    function getXRateProviderLength() external constant returns (uint) {
+        return xrateProviders.length;
+    }
+
+
+    // *************************************************
+    // *           single payment methods              *
+    // *************************************************
+
+    ///@notice makes single payment to service provider.
+    ///@param _value - amount of SAN token to sent
+    ///@param _paymentData - 'payment purpose' code usually issued by service provider to customer before payment.
+    ///@param _to - service provider contract
+    ///@return `true` on success; `false` of failure (if caller is a contract) or throw an exception (if caller is not a contract)
+    //
+    function paymentTo(uint _value, bytes _paymentData, PaymentListener _to) public returns (bool success) {
+        if (san._fulfillPayment(msg.sender, _to, _value, 0, msg.sender)) {
+            // a PaymentListener (a ServiceProvider) has here an opportunity verify and reject the payment
+            assert (PaymentListener(_to).onPayment(msg.sender, _value, _paymentData));
+            return true;
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
+    }
+
+
+    ///@notice makes single preapproved payment to service provider. An amount must be already preapproved by payment sender to recepient.
+    ///@param _value - amount of SAN token to sent
+    ///@param _paymentData - 'payment purpose' code usually issued by service provider to customer before payment.
+    ///@param _from - sender of the payment (other than msg.sender)
+    ///@param _to - service provider contract
+    ///@return `true` on success; `false` of failure (if caller is a contract) or throw an exception (if caller is not a contract)
+    //
+    function paymentFrom(uint _value, bytes _paymentData, address _from, PaymentListener _to) public returns (bool success) {
+        if (san._fulfillPreapprovedPayment(_from, _to, _value, msg.sender)) {
+            // a PaymentListener (a ServiceProvider) has here an opportunity verify and reject the payment
+            assert (PaymentListener(_to).onPayment(_from, _value, _paymentData));
+            return true;
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
+    }
+
+
+    // *************************************************
+    // *            subscription handling              *
+    // *************************************************
+
+    ///@dev convenience getter for some subscription fields
     function subscriptionDetails(uint subId) external constant returns (
         address transferFrom,
         address transferTo,
@@ -211,6 +337,9 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         return (sub.transferFrom, sub.transferTo, sub.pricePerHour, sub.initialXrate_n, sub.initialXrate_d, sub.xrateProviderId, sub.chargePeriod, sub.startOn, sub.descriptor);
     }
 
+
+    ///@dev convenience getter for some subscription fields
+    ///     a caller must know, that the subscription with given id exists, because all these fields can be 0 even the subscription with given id exists.
     function subscriptionStatus(uint subId) external constant returns(
         uint depositAmount,
         uint expireOn,
@@ -222,32 +351,15 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         return (sub.depositAmount, sub.expireOn, sub.execCounter, sub.paidUntil, sub.onHoldSince);
     }
 
-    function registerXRateProvider(XRateProvider addr) external only(owner) returns (uint16 xrateProviderId) {
-        xrateProviderId = uint16(xrateProviders.length);
-        xrateProviders.push(addr);
-        NewXRateProvider(addr, xrateProviderId, msg.sender);
-    }
 
-    function getXRateProviderLength() external constant returns (uint) { return xrateProviders.length; }
-
-    function paymentTo(uint _value, bytes _paymentData, PaymentListener _to) public returns (bool success) {
-        if (san._fulfillPayment(msg.sender, _to, _value, 0, msg.sender)) {
-            // a PaymentListener (a ServiceProvider) has here an opportunity verify and reject the payment
-            assert (PaymentListener(_to).onPayment(msg.sender, _value, _paymentData));
-            return true;
-        } else if (isContract(msg.sender)) { return false; }
-          else { throw; }
-    }
-
-    function paymentFrom(uint _value, bytes _paymentData, address _from, PaymentListener _to) public returns (bool success) {
-        if (san._fulfillPreapprovedPayment(_from, _to, _value, msg.sender)) {
-            // a PaymentListener (a ServiceProvider) has here an opportunity verify and reject the payment
-            assert (PaymentListener(_to).onPayment(_from, _value, _paymentData));
-            return true;
-        } else if (isContract(msg.sender)) { return false; }
-          else { throw; }
-    }
-
+    ///@notice execute periodic subscription payment.
+    ///        Any of customer, service provider and platform owner can execute this function.
+    ///        This ensures, that the subscription charge doesn't become delayed.
+    ///        At least the platform owner has an incentive to get fee and thus can trigger the function.
+    ///        An execution fails if subscription is not in status `CHARGEABLE`.
+    ///@param subId - subscription to be charged.
+    ///@return `true` on success; `false` of failure (if caller is a contract) or throw an exception (if caller is not a contract)
+    //
     function executeSubscription(uint subId) public returns (bool) {
         Subscription storage sub = subscriptions[subId];
         assert (_isNotOffer(sub));
@@ -259,7 +371,7 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
             if (san._fulfillPayment(_from, _to, _value, subId, msg.sender)) {
                 sub.paidUntil  = max(sub.paidUntil, sub.startOn) + sub.chargePeriod;
                 ++sub.execCounter;
-                // a PaymentListener (a ServiceProvider) has here an opportunity verify and reject the payment
+                // a PaymentListener (a ServiceProvider) has here an opportunity to verify and reject the payment
                 assert (PaymentListener(_to).onSubExecuted(subId));
                 return true;
             }
@@ -268,6 +380,13 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         else { throw; }
     }
 
+
+    ///@notice move `paidUntil` forward to given `newDueDate`. It waives payments for given time.
+    ///        This function can be used by service provider to `give away` some service time for free.
+    ///@param subId - id of subscription to be postponed.
+    ///@param newDueDate - new `paidUntil` datetime; require `newDueDate > paidUntil`.
+    ///@return `true` on success; `false` of failure (if caller is a contract) or throw an exception (if caller is not a contract)
+    //
     function postponeDueDate(uint subId, uint newDueDate) public returns (bool success){
         Subscription storage sub = subscriptions[subId];
         assert (_isNotOffer(sub));
@@ -279,12 +398,18 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
           else { throw; }
     }
 
+
+    ///@dev return current status of subscription with gived id;
     function currentStatus(uint subId) public constant returns(Status status) {
         return _currentStatus(subscriptions[subId]);
     }
 
+
     function _currentStatus(Subscription storage sub) internal constant returns(Status status) {
-        if (sub.onHoldSince>0) {
+        if (sub.transferTo == 0) {
+            //every subscription or offer has this field set. If not -- there is no record to given id at all.
+            return Status.NOT_EXIST;
+        } else if (sub.onHoldSince>0) {
             return Status.ON_HOLD;
         } else if (sub.transferFrom==0) {
             return Status.OFFER;
@@ -395,6 +520,7 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
 
     ///@notice cancel an offer given by `offerId`.
     ///@dev sets offer.`expireOn` to `expireOn`.
+    ///@return `true` on success; `false` of failure (if caller is a contract) or throw an exception (if caller is not a contract)
     //
     function cancelSubscriptionOffer(uint offerId) public returns (bool) {
         Subscription storage offer = subscriptions[offerId];
@@ -406,7 +532,7 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
             return true;
         } else if (isContract(msg.sender)) { return false; }
           else { throw; }
-  }
+    }
 
 
     ///@notice cancel an subscription given by `subId` (a graceful version).
@@ -449,9 +575,96 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
     }
 
 
+    ///@notice place an active offer on hold; it means no subscriptions can be created from this offer.
+    ///        Only service provider (or platform owner) is allowed to hold/unhold a subscription offer.
+    ///@param offerId - id of the offer to be placed on hold.
+    ///@return `true` on success; `false` of failure (if caller is a contract) or throw an exception (if caller is not a contract)
+    //
+    function holdSubscriptionOffer(uint offerId) public returns (bool success) {
+        Subscription storage offer = subscriptions[offerId];
+        assert (_isOffer(offer));
+        require (msg.sender == offer.transferTo || msg.sender == owner); //only owner or service provider can place the offer on hold.
+        if (offer.onHoldSince == 0) {
+            offer.onHoldSince = now;
+            OfferOnHold(offerId, true, msg.sender);
+            return true;
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
+    }
+
+
+    ///@notice resume on-hold offer; subscriptions can be created from this offer again (if other conditions are met).
+    ///        Only service provider (or platform owner) is allowed to hold/unhold a subscription offer.
+    ///@param offerId - id of the offer to be resumed.
+    ///@return `true` on success; `false` of failure (if caller is a contract) or throw an exception (if caller is not a contract)
+    //
+    function unholdSubscriptionOffer(uint offerId) public returns (bool success) {
+        Subscription storage offer = subscriptions[offerId];
+        assert (_isOffer(offer));
+        require (msg.sender == offer.transferTo || msg.sender == owner); //only owner or service provider can reactivate the offer.
+        if (offer.onHoldSince > 0) {
+            offer.onHoldSince = 0;
+            OfferOnHold(offerId, false, msg.sender);
+            return true;
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
+    }
+
+
+    ///@notice called by customer or service provider to place a subscription on hold.
+    ///        If call is originated by customer the service provider can reject the request.
+    ///        A subscription on hold will not be charged. The service is usually not provided as well.
+    ///        During hold time a subscription preserve remaining paid time period, which becomes available after unhold.
+    ///@return `true` on success; `false` of failure (if caller is a contract) or throw an exception (if caller is not a contract)
+    //
+    function holdSubscription (uint subId) public returns (bool success) {
+        Subscription storage sub = subscriptions[subId];
+        assert (_isNotOffer(sub));
+        var _to = sub.transferTo;
+        require (msg.sender == _to || msg.sender == sub.transferFrom); //only customer or provider can place the subscription on hold.
+        if (sub.onHoldSince == 0) {
+            if (msg.sender == _to || PaymentListener(_to).onSubUnHold(subId, msg.sender, true)) {
+                sub.onHoldSince = now;
+                SubOnHold(subId, true, msg.sender);
+                return true;
+            }
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
+    }
+
+
+    ///@notice called by customer or service provider to unhold subscription.
+    ///        If call is originated by customer the service provider can reject the request.
+    ///        A subscription on hold will not be charged. The service is usually not provided as well.
+    ///        During hold time a subscription preserve remaining paid time period, which becomes available after unhold.
+    ///@return `true` on success; `false` of failure (if caller is a contract) or throw an exception (if caller is not a contract)
+    //
+    function unholdSubscription(uint subId) public returns (bool success) {
+        Subscription storage sub = subscriptions[subId];
+        assert (_isNotOffer(sub));
+        var _to = sub.transferTo;
+        require (msg.sender == _to || msg.sender == sub.transferFrom); //only customer or provider can place the subscription on hold.
+        if (sub.onHoldSince > 0) {
+            if (msg.sender == _to || PaymentListener(_to).onSubUnHold(subId, msg.sender, false)) {
+                sub.paidUntil += now - sub.onHoldSince;
+                sub.onHoldSince = 0;
+                SubOnHold(subId, false, msg.sender);
+                return true;
+            }
+        } else if (isContract(msg.sender)) { return false; }
+          else { throw; }
+    }
+
+
+
+    // *************************************************
+    // *              deposit handling                 *
+    // *************************************************
+
     ///@notice can be called by provider on CANCELED subscription to return a subscription deposit to customer immediately.
     ///        Customer can anyway collect his deposit after `paidUntil` period is over.
     ///@param subId - subscription holding the deposit
+    //
     function returnSubscriptionDesposit(uint subId) external {
         Subscription storage sub = subscriptions[subId];
         assert (_isNotOffer(sub));
@@ -466,12 +679,13 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
     ///@notice called by customer on EXPIRED subscription (`paidUntil` period is over) to collect a subscription deposit.
     ///        Customer can anyway collect his deposit after `paidUntil` period is over.
     ///@param subId - subscription holding the deposit
-    function claimSubscriptionDeposit(uint subId) public {
+    //
+    function claimSubscriptionDeposit(uint subId) external {
         Subscription storage sub = subscriptions[subId];
+        assert (_isNotOffer(sub));
         assert (_currentStatus(sub) == Status.EXPIRED);
         assert (sub.transferFrom == msg.sender);
         assert (sub.depositAmount > 0);
-        assert (_isNotOffer(sub));
         _returnSubscriptionDesposit(subId, sub);
     }
 
@@ -485,101 +699,45 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
     }
 
 
-    ///@notice place an active offer on hold; it means no subscriptions can be created from this offer.
-    ///        Only service provider (or platform owner) is allowed to hold/unhold a subscription offer.
-    ///@param offerId - id of the offer to be placed on hold.
-    function holdSubscriptionOffer(uint offerId) public returns (bool success) {
-        Subscription storage offer = subscriptions[offerId];
-        assert (_isOffer(offer));
-        require (msg.sender == offer.transferTo || msg.sender == owner); //only owner or service provider can place the offer on hold.
-        if (offer.onHoldSince == 0) {
-            offer.onHoldSince = now;
-            OfferOnHold(offerId, true, msg.sender);
-            return true;
-        } else if (isContract(msg.sender)) { return false; }
-          else { throw; }
-    }
-
-    ///@notice resume on-hold offer; subscriptions can be created from this offer again (if other conditions are met).
-    ///        Only service provider (or platform owner) is allowed to hold/unhold a subscription offer.
-    ///@param offerId - id of the offer to be resumed.
-    function unholdSubscriptionOffer(uint offerId) public returns (bool success) {
-        Subscription storage offer = subscriptions[offerId];
-        assert (_isOffer(offer));
-        require (msg.sender == offer.transferTo || msg.sender == owner); //only owner or service provider can reactivate the offer.
-        if (offer.onHoldSince > 0) {
-            offer.onHoldSince = 0;
-            OfferOnHold(offerId, false, msg.sender);
-            return true;
-        } else if (isContract(msg.sender)) { return false; }
-          else { throw; }
-    }
-
-    // a service can allow/disallow a hold/unhold request
-    function holdSubscription (uint subId) public returns (bool success) {
-        Subscription storage sub = subscriptions[subId];
-        assert (_isNotOffer(sub));
-        if (sub.onHoldSince > 0) { return true; }
-        var _to = sub.transferTo;
-        if (msg.sender == _to || PaymentListener(_to).onSubUnHold(subId, msg.sender, true)) {
-            sub.onHoldSince = now;
-            SubOnHold(subId, true, msg.sender);
-            return true;
-        } else if (isContract(msg.sender)) { return false; }
-          else { throw; }
-    }
-
-    // a service can allow/disallow a hold/unhold request
-    function unholdSubscription(uint subId) public returns (bool success) {
-        Subscription storage sub = subscriptions[subId];
-        assert (_isNotOffer(sub));
-        if (sub.onHoldSince == 0) { return true; }
-        var _to = sub.transferTo;
-        if (msg.sender == _to || PaymentListener(_to).onSubUnHold(subId, msg.sender, false)) {
-            sub.paidUntil += now - sub.onHoldSince;
-            sub.onHoldSince = 0;
-            SubOnHold(subId, false, msg.sender);
-            return true;
-        } else if (isContract(msg.sender)) { return false; }
-          else { throw; }
-    }
-
-    function createDeposit(uint _value, bytes _descriptor) public returns (uint subId) {
-      return _createDeposit(msg.sender, _value, _descriptor);
-    }
-
-    function claimDeposit(uint depositId) public {
-        return _claimDeposit(depositId, msg.sender);
-    }
-
-    function paybackSubscriptionDeposit(uint subId) public {
-        Subscription storage sub = subscriptions[subId];
-        assert (_isNotOffer(sub));
-        assert (currentStatus(subId) == Status.EXPIRED);
-        var depositAmount = sub.depositAmount;
-        assert (depositAmount > 0);
-        sub.depositAmount = 0;
-        san._mintFromDeposit(sub.transferFrom, depositAmount);
-    }
-
-    function _createDeposit(address _owner, uint _value, bytes _descriptor) internal returns (uint depositId) {
-        assert (san._burnForDeposit(_owner,_value));
+    ///@notice create simple unlocked deposit, required by some services. It can be considered as prove of customer's stake.
+    ///        This desposit can be claimed back by the customer at anytime.
+    ///        The service provider is responsible to check the deposit before providing the service.
+    ///@param _value - non zero deposit amount.
+    ///@param _descriptor - is a uniq key, usually given by service provider to the customer in order to make this deposit unique.
+    ///        Service Provider should reject deposit with unknown descriptor, because most probably it is in use for some another service.
+    ///@return depositId - a handle to claim back the deposit later.
+    //
+    function createDeposit(uint _value, bytes _descriptor) public returns (uint depositId) {
+        require (_value > 0);
+        assert (san._burnForDeposit(msg.sender,_value));
         deposits[++depositCounter] = Deposit ({
-            owner : _owner,
+            owner : msg.sender,
             value : _value,
             descriptor : _descriptor
         });
-        NewDeposit(depositCounter, _value, _owner);
+        NewDeposit(depositCounter, _value, msg.sender);
         return depositCounter;
     }
 
-    function _claimDeposit(uint depositId, address returnTo) internal {
-        if (deposits[depositId].owner == returnTo) {
-            san._mintFromDeposit(returnTo, deposits[depositId].value);
-            delete deposits[depositId];
-            DepositReturned(depositId, returnTo);
-        } else { throw; }
+
+    ///@notice return previously created deposit to the user. User can collect only own deposit.
+    ///        The service provider is responsible to check the deposit before providing the service.
+    ///@param _depositId - an id of the deposit to be collected.
+    //
+    function claimDeposit(uint _depositId) public {
+        var deposit = deposits[_depositId];
+        require (deposit.owner == msg.sender);
+        var value = deposits[_depositId].value;
+        delete deposits[_depositId];
+        san._mintFromDeposit(msg.sender, value);
+        DepositReturned(_depositId, msg.sender);
     }
+
+
+
+    // *************************************************
+    // *            some internal functions            *
+    // *************************************************
 
     function _amountToCharge(Subscription storage sub) internal returns (uint) {
         return _applyXchangeRate(sub.pricePerHour * sub.chargePeriod, sub) / 1 hours;
@@ -612,11 +770,4 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
         _;
     }
 
-    mapping (address=>bool) public providerRegistry;
-    mapping (uint => Subscription) public subscriptions;
-    mapping (uint => Deposit) public deposits;
-    XRateProvider[] public xrateProviders;
-    uint public subscriptionCounter = 0;
-    uint public depositCounter = 0;
-
-}
+} //SubscriptionModuleImpl
