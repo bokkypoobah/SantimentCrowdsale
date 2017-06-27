@@ -2,9 +2,13 @@ pragma solidity ^0.4.11;
 
 import "./SAN.sol";
 
-contract TestableProvider is PaymentListener, SubscriptionBase, Base {
+contract TestableProvider is ServiceProvider, SubscriptionBase, Base {
     SubscriptionModule public sub;
     address public owner;
+
+    function info() public constant returns(string) {
+        return "Testable Provider v0.1.0";
+    }
 
     function TestableProvider(SubscriptionModule _sub, address _owner) public {
         sub = _sub;
@@ -17,6 +21,7 @@ contract TestableProvider is PaymentListener, SubscriptionBase, Base {
     )  returns (uint subId) {
         subId = sub.createSubscriptionOffer(_price, _xrateProviderId, _chargePeriod, _validUntil, _offerLimit, _depositValue, _startOn, _descriptor);
         //if (uint(san)>0) subId = san.createOffer2(_price);
+        OfferCreated(subId,  _descriptor, this);
         NewOffer(this,subId);
     }
 
