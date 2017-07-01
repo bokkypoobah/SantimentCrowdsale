@@ -5,6 +5,7 @@ My Notes:
 * This contract will hold the raised funds until the funds can be withdrawn, so is high risk
 
 ```javascript
+// BK Ok
 pragma solidity ^0.4.11;
 
 // ==== DISCLAIMER ====
@@ -28,45 +29,56 @@ pragma solidity ^0.4.11;
 
 import "./Base.sol";
 
+// BK Ok
 contract BalanceStorage {
     function balances(address account) public returns(uint balance);
 }
 
+// BK Ok
 contract AddressList {
     function contains(address addr) public returns (bool);
 }
 
+// BK Ok
 contract MinMaxWhiteList {
     // BK NOTE - The units here are in finney. uint24 has max 2^24 = 16,777,216, max 16777.216 eth
     function allowed(address addr) public returns (uint24 /*finney*/, uint24 /*finney*/ );
 }
 
+// BK Ok
 contract PresaleBonusVoting {
     function rawVotes(address addr) public returns (uint rawVote);
 }
 
 contract CrowdsaleMinter is Owned {
-
+	// BK Ok
     string public constant VERSION = "0.2.0";
 
     /* ====== configuration START ====== */
+    // BK Next 5 Ok - block numbers. May be better to use time as it give more certainty, but not important
     uint public constant COMMUNITY_SALE_START = 0; /* approx. 30.07.2017 00:00 */
     uint public constant PRIORITY_SALE_START  = 0; /* approx. 30.07.2017 00:00 */
     uint public constant PUBLIC_SALE_START    = 0; /* approx. 30.07.2017 00:00 */
     uint public constant PUBLIC_SALE_END      = 0; /* approx. 30.07.2017 00:00 */
     uint public constant WITHDRAWAL_END       = 0; /* approx. 30.07.2017 00:00 */
 
-	/ BK NOTE `owner` already declared in Owned
+	// BK NOTE - Duplicate of Base::Owner.owner. Can cause some issues if 
+	//           ownership is transferred, as only Owner.owner is changed, and not this
+	//           variable
     address public constant owner = 0x00000000000000000000000000;
 
+	// BK Ok - Assuming it will be filled in
     address public constant TEAM_GROUP_WALLET           = 0x00000000000000000000000000;
     address public constant ADVISERS_AND_FRIENDS_WALLET = 0x00000000000000000000000000;
 
+	// BK Next 2 Ok
     uint public constant TEAM_BONUS_PER_CENT            = 18;
     uint public constant ADVISORS_AND_PARTNERS_PER_CENT = 10;
 
+	// BK Ok - SAN
     MintableToken      public TOKEN                    = MintableToken(0x00000000000000000000000000);
 
+	// BK Next 4 Ok
     AddressList        public PRIORITY_ADDRESS_LIST    = AddressList(0x00000000000000000000000000);
     MinMaxWhiteList    public COMMUNITY_ALLOWANCE_LIST = MinMaxWhiteList(0x00000000000000000000000000);
     BalanceStorage     public PRESALE_BALANCES         = BalanceStorage(0x4Fd997Ed7c10DbD04e95d3730cd77D79513076F2);
@@ -138,8 +150,8 @@ contract CrowdsaleMinter is Owned {
     uint private constant COMMUNITY_PLUS_PRIORITY_SALE_CAP = COMMUNITY_PLUS_PRIORITY_SALE_CAP_ETH * 1 ether;
     uint private constant MIN_TOTAL_AMOUNT_TO_RECEIVE = MIN_TOTAL_AMOUNT_TO_RECEIVE_ETH * 1 ether;
     uint private constant MAX_TOTAL_AMOUNT_TO_RECEIVE = MAX_TOTAL_AMOUNT_TO_RECEIVE_ETH * 1 ether;
-    // BK Ok - 0.5 ETH in wei
     uint private constant MIN_ACCEPTED_AMOUNT = MIN_ACCEPTED_AMOUNT_FINNEY * 1 finney;
+    // BK Ok
     bool private allBonusesAreMinted = false;
 
     //
@@ -149,7 +161,7 @@ contract CrowdsaleMinter is Owned {
     //accept payments here
     function ()
     payable
-    noReentrancy
+    noAnyReentrancy
     {
         State state = currentState();
         uint amount_allowed;
@@ -179,7 +191,7 @@ contract CrowdsaleMinter is Owned {
 
     function refund() external
     inState(State.REFUND_RUNNING)
-    noReentrancy
+    noAnyReentrancy
     {
         _sendRefund();
     }
@@ -187,12 +199,10 @@ contract CrowdsaleMinter is Owned {
 
     function withdrawFundsAndStartToken() external
     inState(State.WITHDRAWAL_RUNNING)
-    noReentrancy
+    noAnyReentrancy
     only(owner)
     {
         // transfer funds to owner
-        // BK NOTE Recommendation is to use transfer(...)
-        //    https://github.com/ConsenSys/smart-contract-best-practices#be-aware-of-the-tradeoffs-between-send-transfer-and-callvalue
         if (!owner.send(this.balance)) throw;
 
         //notify token contract to start
@@ -205,12 +215,18 @@ contract CrowdsaleMinter is Owned {
     event TokenStarted(address tokenAddr);
 
     //there are around 40 addresses in PRESALE_ADDRESSES list. Everything fits into single Tx.
+    // BK NOTE - Confirm the gas usage for this tx
     function mintAllBonuses() external
+    // BK Ok - after public sale
     inState(State.BONUS_MINTING)
-    noReentrancy
+    // BK Ok
+    noAnyReentrancy
+    // BK Ok - Anyone can call this tx, and it will allocate the balances for the 38 addresses
     //only(owner)     //ToDo: think about possibe attac vector if this func is public. It must be public because bonus holder should be able call it.
     {
+        // BK Ok - Set to false initially
         assert(!allBonusesAreMinted);
+        // BK Ok - Can only run once
         allBonusesAreMinted = true;
 
         //mint group bonuses
@@ -221,6 +237,7 @@ contract CrowdsaleMinter is Owned {
         for(uint i=0; i < PRESALE_ADDRESSES.length; ++i) {
             address addr = PRESALE_ADDRESSES[i];
             uint presale_balance = PRESALE_BALANCES.balances(addr);
+            // BK Ok - Some presale balances are 0, e.g. 0xF55DFd2B02Cf3282680C94BD01E9Da044044E6A2
             if (presale_balance > 0) {
 
                 // this calculation is about waived pre-sale bonus.
@@ -263,8 +280,7 @@ contract CrowdsaleMinter is Owned {
         // reset balance
         balances[msg.sender] = 0;
         // send refund back to sender
-        // BK NOTE Recommendation is to use transfer(...)
-        //    https://github.com/ConsenSys/smart-contract-best-practices#be-aware-of-the-tradeoffs-between-send-transfer-and-callvalue
+        // BK Ok
         if (!msg.sender.send(amount_to_refund)) throw;
     }
 
