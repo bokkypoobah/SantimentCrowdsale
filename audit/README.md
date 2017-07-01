@@ -46,6 +46,50 @@ Comments from initial review of [9394bf3aaff84fc03c0341a5eedc59b02af95c36](https
 
 <br />
 
+### Third Review
+
+* \#21 MEDIUM IMPORTANCE - Checking the bonus calculations
+
+  From [Santiment’s Token Sale; Everything You Need to Know in One Place!](https://medium.com/santiment/santiments-token-sale-everything-you-need-to-know-in-one-place-bf8899ec6152):
+
+  ![](images/TokenDistribution-20170702-002155.png)
+
+  Just to use an example, say there is only one investor who puts in 100 ETH (ignore min, max cap)
+
+  From `uint public constant TOKEN_PER_ETH = 1000;`, there will be 100,000 SAN tokens minted for the investor
+
+  From `uint public constant TEAM_BONUS_PER_CENT = 18;` and `_mint(total_received_amount * TEAM_BONUS_PER_CENT / 100, TEAM_GROUP_WALLET);` there is 18% to the team
+
+  From `uint public constant ADVISORS_AND_PARTNERS_PER_CENT = 10;` and `_mint(total_received_amount * ADVISORS_AND_PARTNERS_PER_CENT / 100, ADVISERS_AND_FRIENDS_WALLET);` there is 10% to advisors and partners
+
+  team bonus = 18,000 SAN
+
+  advisors and partners = 10,000 SAN
+
+  Total SAN = 100,000 + 18,000 + 10,000 = 128,000
+
+  Team bonus = 18,000 / 128,000 = **14.0625%**
+
+  advisor and partners = 10,000 / 128,000 = **7.8125%**
+
+  An alternative calculation:
+
+  team bonus = 100,000 * 18% / (100%-18%-10%) = 100,000 * 18 / 72 = 25000
+
+  advisors and partners = 100,000 * 10% / (100%-18%-10%) = 100,000 * 10 / 72 = 13888.888888888888889
+
+  Total SAN = 100,000 + 25,000 + 13,888.8888 = 138888.888888888888889
+
+  Team bonus = 25,000 / 138888.888888888888889 = 18% (edited)
+
+  Advisor and partners = 13,888.8888 / 138,888.888 = 10%
+
+  Just checking whether you are expecting 18% + 10% of the total, OR 18% + 10% ON TOP OF the total
+
+  Also note that I have not take into account the 18% for the presale participants
+
+<br />
+
 <hr />
 
 ## References
