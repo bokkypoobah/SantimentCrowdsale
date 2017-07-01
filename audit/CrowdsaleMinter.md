@@ -131,9 +131,11 @@ contract CrowdsaleMinter is Owned {
     mapping (address => uint) public balances;
     bool public TOKEN_STARTED = false;
     uint public total_received_amount;
+    // BK Ok - Unique investors
     address[] public investors;
 
     //displays number of uniq investors
+    // BK Ok - Count of unique investors
     function investorsCount() constant external returns(uint) { return investors.length; }
 
     //displays received amount in eth upto now
@@ -296,6 +298,7 @@ contract CrowdsaleMinter is Owned {
             // accept full amount
             amount = msg.value;
         }
+        // BK Ok - Recording unique investors in an array
         if (balances[msg.sender] == 0) investors.push(msg.sender);
         balances[msg.sender] += amount;
         total_received_amount += amount;
