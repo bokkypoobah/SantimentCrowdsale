@@ -48,11 +48,11 @@ Comments from initial review of [9394bf3aaff84fc03c0341a5eedc59b02af95c36](https
 
 ### Third Review
 
-* \#21 MEDIUM IMPORTANCE - Checking the bonus calculations
+* \#21 MEDIUM IMPORTANCE - Checking the token % calculations
 
   From [Santiment’s Token Sale; Everything You Need to Know in One Place!](https://medium.com/santiment/santiments-token-sale-everything-you-need-to-know-in-one-place-bf8899ec6152):
 
-  ![](images/TokenDistribution-20170702-002155.png)
+  <kbd><img src="images/TokenDistribution-20170702-002155.png" /></kbd>
 
   Just to use an example, say there is only one investor who puts in 100 ETH (ignore min, max cap)
 
@@ -80,7 +80,7 @@ Comments from initial review of [9394bf3aaff84fc03c0341a5eedc59b02af95c36](https
 
   Total SAN = 100,000 + 25,000 + 13,888.8888 = 138888.888888888888889
 
-  Team bonus = 25,000 / 138888.888888888888889 = 18% (edited)
+  Team bonus = 25,000 / 138888.888888888888889 = 18%
 
   Advisor and partners = 13,888.8888 / 138,888.888 = 10%
 
