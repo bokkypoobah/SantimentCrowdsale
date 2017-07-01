@@ -72,7 +72,7 @@ Comments from initial review of [9394bf3aaff84fc03c0341a5eedc59b02af95c36](https
 
   advisor and partners = 10,000 / 128,000 = **7.8125%**
 
-  An alternative calculation:
+  **An alternative calculation**:
 
   team bonus = 100,000 * 18% / (100%-18%-10%) = 100,000 * 18 / 72 = 25000
 
@@ -84,9 +84,9 @@ Comments from initial review of [9394bf3aaff84fc03c0341a5eedc59b02af95c36](https
 
   Advisor and partners = 13,888.8888 / 138,888.888 = 10%
 
-  Just checking whether you are expecting 18% + 10% of the total, OR 18% + 10% ON TOP OF the total
+  Just checking whether you are expecting 18% + 10% of the total (this is the alternative), OR 18% + 10% ON TOP OF the total (resulting in 14.0625% and 7.8125%)
 
-  Also note that I have not take into account the 18% for the presale participants
+  Also note that I have not taken into account the 18% for the presale participants
 
 <br />
 
