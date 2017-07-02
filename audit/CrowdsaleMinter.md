@@ -88,6 +88,7 @@ contract CrowdsaleMinter is Owned {
     uint public constant MIN_TOTAL_AMOUNT_TO_RECEIVE_ETH = 15000;
     uint public constant MAX_TOTAL_AMOUNT_TO_RECEIVE_ETH = 45000;
     // BK Ok - 0.5 ETH
+    //         web3.fromWei(web3.toWei(500, "finney"), "ether") => "0.5"
     uint public constant MIN_ACCEPTED_AMOUNT_FINNEY = 500;
     // BK Ok
     uint public constant TOKEN_PER_ETH = 1000;
@@ -130,6 +131,7 @@ contract CrowdsaleMinter is Owned {
     bool public isAborted = false;
     mapping (address => uint) public balances;
     bool public TOKEN_STARTED = false;
+    // BK Ok
     uint public total_received_amount;
     // BK Ok - Unique investors
     address[] public investors;
@@ -139,6 +141,7 @@ contract CrowdsaleMinter is Owned {
     function investorsCount() constant external returns(uint) { return investors.length; }
 
     //displays received amount in eth upto now
+    // BK Ok
     function TOTAL_RECEIVED_ETH() constant external returns (uint) { return total_received_amount / 1 ether; }
 
     //displays current contract state in human readable form
@@ -192,6 +195,7 @@ contract CrowdsaleMinter is Owned {
 
 
     function refund() external
+    // BK NOTE - Investors can call `refund()` if the crowdsale is `abort()`-ed
     inState(State.REFUND_RUNNING)
     noAnyReentrancy
     {
@@ -217,6 +221,7 @@ contract CrowdsaleMinter is Owned {
     event TokenStarted(address tokenAddr);
 
     //there are around 40 addresses in PRESALE_ADDRESSES list. Everything fits into single Tx.
+    // BK NOTE - See issue 21 re % calcs of total, or on top of total
     // BK NOTE - Confirm the gas usage for this tx
     function mintAllBonuses() external
     // BK Ok - after public sale
@@ -232,7 +237,9 @@ contract CrowdsaleMinter is Owned {
         allBonusesAreMinted = true;
 
         //mint group bonuses
+        // BK Ok - uint public constant TEAM_BONUS_PER_CENT            = 18;
         _mint(total_received_amount * TEAM_BONUS_PER_CENT / 100, TEAM_GROUP_WALLET);
+        // BK Ok - uint public constant ADVISORS_AND_PARTNERS_PER_CENT = 10;
         _mint(total_received_amount * ADVISORS_AND_PARTNERS_PER_CENT / 100, ADVISERS_AND_FRIENDS_WALLET);
 
         //mint presale bonuses
@@ -256,6 +263,7 @@ contract CrowdsaleMinter is Owned {
         }
     }
 
+    // BK Ok - Can only attach minter to SAN before the start
     function attachToToken(MintableToken tokenAddr) external
     inState(State.BEFORE_START)
     only(owner)
@@ -264,6 +272,9 @@ contract CrowdsaleMinter is Owned {
     }
 
     function abort() external
+    // BK - enum State { BEFORE_START, COMMUNITY_SALE, PRIORITY_SALE, PRIORITY_SALE_FINISHED, PUBLIC_SALE, BONUS_MINTING, WITHDRAWAL_RUNNING, REFUND_RUNNING, CLOSED }
+    // BK NOTE - isStateBefore includes the stated state, i.e. <= REFUND_RUNNING
+    // BK        i.e., can abort before CLOSED 
     inStateBefore(State.REFUND_RUNNING)
     only(owner)
     {
@@ -275,18 +286,21 @@ contract CrowdsaleMinter is Owned {
     //
 
     function _sendRefund() private
+    // BK Ok - Only accounts that have a non-zero balance
     tokenHoldersOnly
     {
         // load balance to refund plus amount currently sent
+        // BK Ok - Good - additional sent amount + already sent amounts refunded
         var amount_to_refund = balances[msg.sender] + msg.value;
         // reset balance
         balances[msg.sender] = 0;
         // send refund back to sender
-        // BK Ok
+        // BK Ok - Last statement so logic cannot be hijacked
         if (!msg.sender.send(amount_to_refund)) throw;
     }
 
     function _receiveFundsUpTo(uint amount) private
+    // BK Ok - notTooSmallAmountOnly - Cannot receive < 0.5 ETH
     notTooSmallAmountOnly
     {
         require (amount > 0);
@@ -301,6 +315,7 @@ contract CrowdsaleMinter is Owned {
         // BK Ok - Recording unique investors in an array
         if (balances[msg.sender] == 0) investors.push(msg.sender);
         balances[msg.sender] += amount;
+        // BK Ok - Running total
         total_received_amount += amount;
         _mint(amount,msg.sender);
     }
@@ -325,6 +340,7 @@ contract CrowdsaleMinter is Owned {
     function currentState() private constant
     returns (State)
     {
+        // BK NOTE - Owner can `abort()` the crowdsale at any time before the CLOSED status
         if (isAborted) {
             return this.balance > 0
                    ? State.REFUND_RUNNING
@@ -374,6 +390,7 @@ contract CrowdsaleMinter is Owned {
 
 
     // don`t accept transactions with value less than allowed minimum
+    // BK Ok - Only used by notTooSmallAmountOnly
     modifier notTooSmallAmountOnly(){
         if (msg.value < MIN_ACCEPTED_AMOUNT) throw;
         _;

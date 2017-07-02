@@ -218,7 +218,6 @@ function printCsmContractDetails() {
     console.log("RESULT: csm.PUBLIC_SALE_START=" + contract.PUBLIC_SALE_START());
     console.log("RESULT: csm.PUBLIC_SALE_END=" + contract.PUBLIC_SALE_END());
     console.log("RESULT: csm.WITHDRAWAL_END=" + contract.WITHDRAWAL_END());
-    console.log("RESULT: csm.OWNER=" + contract.OWNER());
     console.log("RESULT: csm.ADMIN=" + contract.ADMIN());
     console.log("RESULT: csm.TEAM_GROUP_WALLET=" + contract.TEAM_GROUP_WALLET());
     console.log("RESULT: csm.ADVISERS_AND_FRIENDS_WALLET=" + contract.ADVISERS_AND_FRIENDS_WALLET());
