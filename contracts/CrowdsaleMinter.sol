@@ -48,8 +48,6 @@ contract CrowdsaleMinter is Owned {
     uint public constant PUBLIC_SALE_END      = 0; /* approx. 30.07.2017 00:00 */
     uint public constant WITHDRAWAL_END       = 0; /* approx. 30.07.2017 00:00 */
 
-    address public constant owner = 0x00000000000000000000000000;
-
     address public constant TEAM_GROUP_WALLET           = 0x00000000000000000000000000;
     address public constant ADVISERS_AND_FRIENDS_WALLET = 0x00000000000000000000000000;
 
@@ -75,6 +73,7 @@ contract CrowdsaleMinter is Owned {
         //check configuration if something in setup is looking weird
         if (
             TOKEN_PER_ETH == 0
+            || TEAM_BONUS_PER_CENT + ADVISORS_AND_PARTNERS_PER_CENT >=100
             || MIN_ACCEPTED_AMOUNT_FINNEY < 1
             || owner == 0x0
             || address(COMMUNITY_ALLOWANCE_LIST) == 0x0
@@ -198,10 +197,27 @@ contract CrowdsaleMinter is Owned {
         assert(!allBonusesAreMinted);
         allBonusesAreMinted = true;
 
-        //mint group bonuses
-        _mint(total_received_amount * TEAM_BONUS_PER_CENT / 100, TEAM_GROUP_WALLET);
-        _mint(total_received_amount * ADVISORS_AND_PARTNERS_PER_CENT / 100, ADVISERS_AND_FRIENDS_WALLET);
+        uint TEAM_AND_PARTNERS_PER_CENT = TEAM_BONUS_PER_CENT + ADVISORS_AND_PARTNERS_PER_CENT;
 
+        uint total_presale_amount_with_bonus = mintPresaleBonuses();
+        uint total_collected_amount = total_received_amount + total_presale_amount_with_bonus;
+        uint extra_amount = total_collected_amount * TEAM_AND_PARTNERS_PER_CENT / (100 - TEAM_AND_PARTNERS_PER_CENT);
+        uint extra_team_amount = extra_amount * TEAM_BONUS_PER_CENT / TEAM_AND_PARTNERS_PER_CENT;
+        uint extra_partners_amount = extra_amount * ADVISORS_AND_PARTNERS_PER_CENT / TEAM_AND_PARTNERS_PER_CENT;
+
+        //beautify total supply: round down to full eth.
+        uint total_to_mint = total_collected_amount + extra_amount;
+        uint round_remainder = total_to_mint - (total_to_mint / 1 ether * 1 ether);
+        extra_team_amount -= round_remainder; //this will reduce total_supply to rounded value
+
+        //mint group bonuses
+        _mint(extra_team_amount , TEAM_GROUP_WALLET);
+        _mint(extra_partners_amount, ADVISERS_AND_FRIENDS_WALLET);
+
+    }
+
+    function mintPresaleBonuses() internal returns(uint amount) {
+        uint total_presale_amount_with_bonus = 0;
         //mint presale bonuses
         for(uint i=0; i < PRESALE_ADDRESSES.length; ++i) {
             address addr = PRESALE_ADDRESSES[i];
@@ -209,17 +225,24 @@ contract CrowdsaleMinter is Owned {
             if (presale_balance > 0) {
 
                 // this calculation is about waived pre-sale bonus.
-                // rawVote contains a value [0..1 ether]. 0 means "no bonus" (100% bonus waived). 1 ether means 100% bonus saved.
-                // "PRE_SALE_BONUS_PER_CENT * rawVote / 1 ether" is an effective bonus per cent for particular presale member.
+                // rawVote contains a value [0..1 ether].
+                //     0 ether    - means "default value" or "no vote" : 100% bonus saved
+                //     1 ether    - means "vote 100%" : 100% bonus saved
+                //    <=10 finney - special value "vote 0%" : no bonus at all (100% bonus waived).
+                //  other value - "PRE_SALE_BONUS_PER_CENT * rawVote / 1 ether" is an effective bonus per cent for particular presale member.
+                //
                 var rawVote = PRESALE_BONUS_VOTING.rawVotes(addr);
-                if (rawVote == 0)           rawVote = 1 ether; //special case "no vote" (default value) ==> (1 ether is 100%)
-                else if (rawVote == 1 wei)  rawVote = 0;       //special case "0%" (no bonus)           ==> (0 ether is   0%)
-                else if (rawVote > 1 ether) rawVote = 1 ether; //max bonus is 100% (should not occur)
+                if (rawVote == 0)              rawVote = 1 ether; //special case "no vote" (default value) ==> (1 ether is 100%)
+                else if (rawVote <= 10 finney) rawVote = 0;       //special case "0%" (no bonus)           ==> (0 ether is   0%)
+                else if (rawVote > 1 ether)    rawVote = 1 ether; //max bonus is 100% (should not occur)
 
                 var presale_bonus = presale_balance * PRE_SALE_BONUS_PER_CENT * rawVote / 1 ether / 100;
-                _mint(presale_balance + presale_bonus, addr);
+                var amount_with_bonus = presale_balance + presale_bonus;
+                _mint(amount_with_bonus, addr);
+                total_presale_amount_with_bonus += amount_with_bonus;
             }
-        }
+        }//for
+        return total_presale_amount_with_bonus;
     }
 
     function attachToToken(MintableToken tokenAddr) external
