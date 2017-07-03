@@ -41,14 +41,14 @@ Comments from initial review of [9394bf3aaff84fc03c0341a5eedc59b02af95c36](https
 
 * \#17 LOW IMPORTANCE **SAN** and **SubscriptionModule** In the constructor, `owner` is already assigned in **Owned**
 * \#18 LOW IMPORTANCE **SAN** `CROWDSALE_MINTER` should be a constant. Note that there is a Solidity compiler bug that generates a warning if you [set address variables as constant](https://github.com/ethereum/solidity/issues/2441) but the fix is not available in 0.4.11
-* \#19 CLOSED ~~LOW IMPORTANCE **CrowdsaleMinter** `owner` already declared in **Owner**, and initialised in constructor~~
+* \#19 CLOSED COMPLETED ~~LOW IMPORTANCE **CrowdsaleMinter** `owner` already declared in **Owner**, and initialised in constructor~~
 * \#20 LOW IMPORTANCE **CrowdsaleMinter** `withdrawFundsAndStartToken(...)` should use `transfer(...)` instead of `if (!owner.send(this.balance)) throw;` - [reference](https://github.com/ConsenSys/smart-contract-best-practices#be-aware-of-the-tradeoffs-between-send-transfer-and-callvalue). Same for the `send(...)` in `_sendRefund(...)`
 
 <br />
 
 ### Third Review
 
-* \#21 MEDIUM IMPORTANCE - Checking the token % calculations
+* \#21 TO CHECK CHANGE MADE ~~MEDIUM IMPORTANCE - Checking the token % calculations~~
 
   From [Santiment’s Token Sale; Everything You Need to Know in One Place!](https://medium.com/santiment/santiments-token-sale-everything-you-need-to-know-in-one-place-bf8899ec6152):
 
