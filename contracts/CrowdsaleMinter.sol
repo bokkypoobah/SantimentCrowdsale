@@ -22,24 +22,24 @@ pragma solidity ^0.4.11;
 import "./Base.sol";
 
 contract BalanceStorage {
-    function balances(address account) public returns(uint balance);
+    function balances(address account) public constant returns(uint balance);
 }
 
 contract AddressList {
-    function contains(address addr) public returns (bool);
+    function contains(address addr) public constant returns (bool);
 }
 
 contract MinMaxWhiteList {
-    function allowed(address addr) public returns (uint /*finney*/, uint /*finney*/ );
+    function allowed(address addr) public constant returns (uint /*finney*/, uint /*finney*/ );
 }
 
 contract PresaleBonusVoting {
-    function rawVotes(address addr) public returns (uint rawVote);
+    function rawVotes(address addr) public constant returns (uint rawVote);
 }
 
 contract CrowdsaleMinter is Owned {
 
-    string public constant VERSION = "0.2.0";
+    string public constant VERSION = "0.2.1";
 
     /* ====== configuration START ====== */
     uint public constant COMMUNITY_SALE_START = 0; /* approx. 30.07.2017 00:00 */
@@ -56,8 +56,8 @@ contract CrowdsaleMinter is Owned {
 
     MintableToken      public TOKEN                    = MintableToken(0x00000000000000000000000000);
 
-    AddressList        public PRIORITY_ADDRESS_LIST    = AddressList(0x00000000000000000000000000);
-    MinMaxWhiteList    public COMMUNITY_ALLOWANCE_LIST = MinMaxWhiteList(0x00000000000000000000000000);
+    AddressList        public PRIORITY_ADDRESS_LIST    = AddressList(0x9411Cf70F97C2ED09325e58629D48401aEd50F89);
+    MinMaxWhiteList    public COMMUNITY_ALLOWANCE_LIST = MinMaxWhiteList(0xd2675d3ea478692ad34f09fa1f8bda67a9696bf7);
     BalanceStorage     public PRESALE_BALANCES         = BalanceStorage(0x4Fd997Ed7c10DbD04e95d3730cd77D79513076F2);
     PresaleBonusVoting public PRESALE_BONUS_VOTING     = PresaleBonusVoting(0x283a97Af867165169AECe0b2E963b9f0FC7E5b8c);
 
@@ -116,6 +116,9 @@ contract CrowdsaleMinter is Owned {
 
     //displays current contract state in human readable form
     function state() constant external returns (string) { return stateNames[ uint(currentState()) ]; }
+
+    function san_whitelist(address addr) public constant returns(uint, uint) { return COMMUNITY_ALLOWANCE_LIST.allowed(addr); }
+    function cfi_whitelist(address addr) public constant returns(bool) { return PRIORITY_ADDRESS_LIST.contains(addr); }
 
     /* ====== public states END ====== */
 
@@ -192,7 +195,6 @@ contract CrowdsaleMinter is Owned {
     function mintAllBonuses() external
     inState(State.BONUS_MINTING)
     noAnyReentrancy
-    //only(owner)     //ToDo: think about possibe attac vector if this func is public. It must be public because bonus holder should be able call it.
     {
         assert(!allBonusesAreMinted);
         allBonusesAreMinted = true;
@@ -221,28 +223,34 @@ contract CrowdsaleMinter is Owned {
         //mint presale bonuses
         for(uint i=0; i < PRESALE_ADDRESSES.length; ++i) {
             address addr = PRESALE_ADDRESSES[i];
-            uint presale_balance = PRESALE_BALANCES.balances(addr);
-            if (presale_balance > 0) {
-
-                // this calculation is about waived pre-sale bonus.
-                // rawVote contains a value [0..1 ether].
-                //     0 ether    - means "default value" or "no vote" : 100% bonus saved
-                //     1 ether    - means "vote 100%" : 100% bonus saved
-                //    <=10 finney - special value "vote 0%" : no bonus at all (100% bonus waived).
-                //  other value - "PRE_SALE_BONUS_PER_CENT * rawVote / 1 ether" is an effective bonus per cent for particular presale member.
-                //
-                var rawVote = PRESALE_BONUS_VOTING.rawVotes(addr);
-                if (rawVote == 0)              rawVote = 1 ether; //special case "no vote" (default value) ==> (1 ether is 100%)
-                else if (rawVote <= 10 finney) rawVote = 0;       //special case "0%" (no bonus)           ==> (0 ether is   0%)
-                else if (rawVote > 1 ether)    rawVote = 1 ether; //max bonus is 100% (should not occur)
-
-                var presale_bonus = presale_balance * PRE_SALE_BONUS_PER_CENT * rawVote / 1 ether / 100;
-                var amount_with_bonus = presale_balance + presale_bonus;
+            var amount_with_bonus = presaleTokenAmount(addr);
+            if (amount_with_bonus>0) {
                 _mint(amount_with_bonus, addr);
                 total_presale_amount_with_bonus += amount_with_bonus;
             }
         }//for
         return total_presale_amount_with_bonus;
+    }
+
+    function presaleTokenAmount(address addr) public constant returns(uint){
+        uint presale_balance = PRESALE_BALANCES.balances(addr);
+        if (presale_balance > 0) {
+            // this calculation is about waived pre-sale bonus.
+            // rawVote contains a value [0..1 ether].
+            //     0 ether    - means "default value" or "no vote" : 100% bonus saved
+            //     1 ether    - means "vote 100%" : 100% bonus saved
+            //    <=10 finney - special value "vote 0%" : no bonus at all (100% bonus waived).
+            //  other value - "PRE_SALE_BONUS_PER_CENT * rawVote / 1 ether" is an effective bonus per cent for particular presale member.
+            //
+            var rawVote = PRESALE_BONUS_VOTING.rawVotes(addr);
+            if (rawVote == 0)              rawVote = 1 ether; //special case "no vote" (default value) ==> (1 ether is 100%)
+            else if (rawVote <= 10 finney) rawVote = 0;       //special case "0%" (no bonus)           ==> (0 ether is   0%)
+            else if (rawVote > 1 ether)    rawVote = 1 ether; //max bonus is 100% (should not occur)
+            var presale_bonus = presale_balance * PRE_SALE_BONUS_PER_CENT * rawVote / 1 ether / 100;
+            return presale_balance + presale_bonus;
+        } else {
+            return 0;
+        }
     }
 
     function attachToToken(MintableToken tokenAddr) external
