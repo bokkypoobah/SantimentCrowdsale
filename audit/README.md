@@ -4,6 +4,11 @@ Preliminary work has been done on Santiment's crowdsale contracts during the dev
 
 This is the audit of the contract deployed for live use. The primary aim of this audit is to reduce the risk of the loss of funds.
 
+Contract addresses:
+
+* CrowdsaleMinter - [0xda2cf810c5718135247628689d84f94c61b41d6a](https://etherscan.io/address/0xda2cf810c5718135247628689d84f94c61b41d6a)
+* SAN Token - [0x7221816f73e710eb952ce08bcaf54a31600fae6c](https://etherscan.io/address/0x7221816f73e710eb952ce08bcaf54a31600fae6c)
+* Subscription Module - [0x29f0b7c3d8ee8f6471922f089f459cab53029113](https://etherscan.io/address/0x29f0b7c3d8ee8f6471922f089f459cab53029113)
 
 <br />
 
@@ -356,18 +361,28 @@ contract CrowdsaleMinter is Owned {
 
     //accept payments here
     function ()
+    // BK Ok - Accept funds
     payable
+    // BK Ok
     noAnyReentrancy
     {
+        // BK Ok
         State state = currentState();
         uint amount_allowed;
         if (state == State.COMMUNITY_SALE) {
+            // BK Ok - see #1 re type conversion
             var (min_finney, max_finney) = COMMUNITY_ALLOWANCE_LIST.allowed(msg.sender);
+            // BK Ok
             var (min, max) = (min_finney * 1 finney, max_finney * 1 finney);
+            // BK Ok - Current balance
             var sender_balance = balances[msg.sender];
+            // BK Ok - Check below max
             assert (sender_balance <= max); //sanity check: should be always true;
+            // BK Ok - Check above min
             assert (msg.value >= min);      //reject payments less than minimum
+            // BK Ok - Check amount remaining that can be contributed
             amount_allowed = max - sender_balance;
+            // BK Ok - Receive funds and mint tokens
             _receiveFundsUpTo(amount_allowed);
         } else if (state == State.PRIORITY_SALE) {
             assert (PRIORITY_ADDRESS_LIST.contains(msg.sender));
@@ -529,7 +544,9 @@ contract CrowdsaleMinter is Owned {
     }
 
     function _receiveFundsUpTo(uint amount) private
+    // BK Ok - Check for minimum contribution amount 
     notTooSmallAmountOnly
+    // BK Ok
     {
         // BK Ok - Must be > 0 
         require (amount > 0);
@@ -543,14 +560,22 @@ contract CrowdsaleMinter is Owned {
             if (!msg.sender.send(change_to_return)) throw;
         } else {
             // accept full amount
+            // BK Ok - Below full amount
             amount = msg.value;
         }
+        // BK Ok - Keeping track of investors
         if (balances[msg.sender] == 0) investors.push(msg.sender);
+        // BK Ok - Keeping track of investors balance
+        //       - Cannot overflow as this amount is restricted by the value of ETH sent
         balances[msg.sender] += amount;
+        // BK Ok - Keep track of total received amount
+        //       - Cannot overflow as this amount is restricted by the value of ETH sent
         total_received_amount += amount;
+        // BK Ok - Mint the tokens
         _mint(amount,msg.sender);
     }
 
+    // BK Ok
     function _mint(uint amount, address account) private {
         MintableToken(TOKEN).mint(amount * TOKEN_PER_ETH, account);
     }
