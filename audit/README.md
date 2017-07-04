@@ -10,11 +10,22 @@ This is the audit of the contract deployed for live use. The primary aim of this
 <hr />
 
 ## Table Of Contents
+* [Source Code Overview](#source-code-overview)
 * [CrowdsaleMinter](#crowdsaleminter)
 * [SAN Token Contract](#san-token-contract)
 * [Subscription Module](#subscription-module)
 
 <br />
+
+<hr />
+
+## Source Code Overview
+
+This review is primarily aimed to reduce the risk of the loss of the funds. Minor issues are already covered in [README-old.md](README-old.md).
+
+<br />
+
+<hr />
 
 ## CrowdsaleMinter
 
@@ -22,6 +33,7 @@ The CrowdsaleMinter contract is deployed at [0xda2cf810c5718135247628689d84f94c6
 
 
 ```javascript
+// BK Ok
 pragma solidity ^0.4.11;
 
 // ==== DISCLAIMER ====
@@ -45,16 +57,19 @@ pragma solidity ^0.4.11;
 
 contract Base {
 
+    // BK Ok - Could be internal marked constant
     function max(uint a, uint b) returns (uint) { return a >= b ? a : b; }
+    // BK Ok - Could be marked internal constant
     function min(uint a, uint b) returns (uint) { return a <= b ? a : b; }
 
+    // BK Ok - Throw if calling account is not the specified one 
     modifier only(address allowed) {
         if (msg.sender != allowed) throw;
         _;
     }
 
-
     ///@return True if `_addr` is a contract
+    // BK Ok
     function isContract(address _addr) constant internal returns (bool) {
         if (_addr == 0) return false;
         uint size;
@@ -69,6 +84,7 @@ contract Base {
     // *************************************************
 
     //@dev predefined locks (up to uint bit length, i.e. 256 possible)
+    // BK Next 6 Ok
     uint constant internal L00 = 2 ** 0;
     uint constant internal L01 = 2 ** 1;
     uint constant internal L02 = 2 ** 2;
