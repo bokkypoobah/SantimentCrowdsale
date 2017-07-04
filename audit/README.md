@@ -10,10 +10,20 @@ This is the audit of the contract deployed for live use. The primary aim of this
 <hr />
 
 ## Table Of Contents
+* [Summary](#summary)
 * [Source Code Overview](#source-code-overview)
 * [CrowdsaleMinter](#crowdsaleminter)
 * [SAN Token Contract](#san-token-contract)
 * [Subscription Module](#subscription-module)
+* [SantimentWhiteList](#santimentwhitelist)
+
+<br />
+
+<hr />
+
+## Summary
+
+No severe security issues have been found that will enable an attacker to drain ethers from this contract.
 
 <br />
 
@@ -21,7 +31,14 @@ This is the audit of the contract deployed for live use. The primary aim of this
 
 ## Source Code Overview
 
-This review is primarily aimed to reduce the risk of the loss of the funds. Minor issues are already covered in [README-old.md](README-old.md).
+This review is primarily aimed to reduce the risk of the loss of the funds. Some corrected bugs and minor issues have already been covered in [README-old.md](README-old.md).
+
+Issues:
+
+* \#1 Note that `CrowdsaleMinter.()` calls `var (min_finney, max_finney) = COMMUNITY_ALLOWANCE_LIST.allowed(msg.sender);` and there is a slight possibility of a type mismatch, but testing seems to have confirmed the correct workings.
+
+  The interface for MinMaxWhiteList has the return signature of `function allowed(address addr) public constant returns (uint /*finney*/, uint /*finney*/ );` while
+  the deployed SantimentWhiteList has the allowed structure consisting of `struct LimitWithAddr { address addr; uint24 min; /* finney */ uint24 max; /* finney */ }` (comments converted).
 
 <br />
 
@@ -31,6 +48,50 @@ This review is primarily aimed to reduce the risk of the loss of the funds. Mino
 
 The CrowdsaleMinter contract is deployed at [0xda2cf810c5718135247628689d84f94c61b41d6a](https://etherscan.io/address/0xda2cf810c5718135247628689d84f94c61b41d6a#code).
 
+The deployed contract has the following parameters
+
+    cm.TOKEN=0x7221816f73e710eb952ce08bcaf54a31600fae6c
+    eth.blockNumber=3972796
+    cm.owner=0x6dd5a9f47cfbc44c04a0a4452f0ba792ebfbcc9a
+    cm.newOwner=0x6dd5a9f47cfbc44c04a0a4452f0ba792ebfbcc9a
+    cm.VERSION=0.2.1
+    cm.COMMUNITY_SALE_START=3973420
+    cm.PRIORITY_SALE_START=3978496
+    cm.PUBLIC_SALE_START=3983578
+    cm.PUBLIC_SALE_END=4130967
+    cm.WITHDRAWAL_END=4288520
+    cm.TEAM_GROUP_WALLET=0xa0d8f33ef9b44daae522531dd5e7252962b09207
+    cm.ADVISERS_AND_FRIENDS_WALLET=0x44f145f6bc36e51eed9b661e99c8b9ccf987c043
+    cm.TEAM_BONUS_PER_CENT=18
+    cm.ADVISORS_AND_PARTNERS_PER_CENT=10
+    cm.TOKEN=0x7221816f73e710eb952ce08bcaf54a31600fae6c
+    cm.PRIORITY_ADDRESS_LIST=0x9411cf70f97c2ed09325e58629d48401aed50f89
+    cm.COMMUNITY_ALLOWANCE_LIST=0xd2675d3ea478692ad34f09fa1f8bda67a9696bf7
+    cm.PRESALE_BALANCES=0x4fd997ed7c10dbd04e95d3730cd77d79513076f2
+    cm.PRESALE_BONUS_VOTING=0x283a97af867165169aece0b2e963b9f0fc7e5b8c
+    cm.COMMUNITY_PLUS_PRIORITY_SALE_CAP_ETH=45000
+    cm.MIN_TOTAL_AMOUNT_TO_RECEIVE_ETH=15000
+    cm.MAX_TOTAL_AMOUNT_TO_RECEIVE_ETH=45000
+    cm.MIN_ACCEPTED_AMOUNT_FINNEY=200
+    cm.TOKEN_PER_ETH=1000
+    cm.PRE_SALE_BONUS_PER_CENT=54
+    cm.isAborted=false
+    cm.TOKEN_STARTED=false
+    cm.total_received_amount=0
+    cm.investorsCount=0
+    cm.TOTAL_RECEIVED_ETH=0
+    cm.state=BEFORE_START
+    token.owner=0x008cdc9b89ad677cef7f2c055efc97d3606a50bd
+    token.newOwner=0x0000000000000000000000000000000000000000
+    token.symbol=SAN
+    token.name=SANtiment network token
+    token.decimals=18
+    sm.owner=0x008cdc9b89ad677cef7f2c055efc97d3606a50bd
+    sm.newOwner=0x0000000000000000000000000000000000000000
+
+<br />
+
+The deployed contract has the following code, with v0.4.11+commit.68ef5810 and optimised:
 
 ```javascript
 // BK Ok
@@ -55,6 +116,7 @@ pragma solidity ^0.4.11;
 /// @author ethernian for Santiment LLC
 /// @title  CrowdsaleMinter
 
+// BK Ok
 contract Base {
 
     // BK Ok - Could be internal marked constant
@@ -93,7 +155,9 @@ contract Base {
     uint constant internal L05 = 2 ** 5;
 
     //prevents reentrancy attacs: specific locks
+    // BK Ok
     uint private bitlocks = 0;
+    // BK Ok
     modifier noReentrancy(uint m) {
         var _locks = bitlocks;
         if (_locks & m > 0) throw;
@@ -102,6 +166,7 @@ contract Base {
         bitlocks = _locks;
     }
 
+    // BK Ok
     modifier noAnyReentrancy {
         var _locks = bitlocks;
         if (_locks > 0) throw;
@@ -112,80 +177,101 @@ contract Base {
 
     ///@dev empty marking modifier signaling to user of the marked function , that it can cause an reentrant call.
     ///     developer should make the caller function reentrant-safe if it use a reentrant function.
+    // BK Ok
     modifier reentrant { _; }
 
 }
 
+// BK Ok
 contract MintableToken {
     //target token contract is responsible to accept only authorized mint calls.
     function mint(uint amount, address account);
 
     //start the token on minting finished,
+    // BK Ok - This is called to start the tokens. If this call fails, the funds from CrowdsaleMinter will be released anyway and
+    //         a new token contract can be redeployed
     function start();
 }
 
+// BK Ok
 contract Owned is Base {
 
+    // BK Next 2 Ok
     address public owner;
     address public newOwner;
 
+    // BK Ok
     function Owned() {
         owner = msg.sender;
     }
 
+    // BK Ok
     function transferOwnership(address _newOwner) only(owner) {
         newOwner = _newOwner;
     }
 
+    // BK Ok - Only newOwner
     function acceptOwnership() only(newOwner) {
         OwnershipTransferred(owner, newOwner);
         owner = newOwner;
     }
 
+    // BK Ok
     event OwnershipTransferred(address indexed _from, address indexed _to);
 
 }
 
+// BK Ok - Matches PreSale at https://etherscan.io/address/0x4Fd997Ed7c10DbD04e95d3730cd77D79513076F2#code
 contract BalanceStorage {
     function balances(address account) public constant returns(uint balance);
 }
 
+// BK Ok - Matches https://etherscan.io/address/0x9411Cf70F97C2ED09325e58629D48401aEd50F89#code
 contract AddressList {
     function contains(address addr) public constant returns (bool);
 }
 
+// BK NOTE - See #1 above re mismatch in type - uint24 -> uint
 contract MinMaxWhiteList {
     function allowed(address addr) public constant returns (uint /*finney*/, uint /*finney*/ );
 }
 
+// BK Ok - Matches https://etherscan.io/address/0x283a97Af867165169AECe0b2E963b9f0FC7E5b8c#code
 contract PresaleBonusVoting {
     function rawVotes(address addr) public constant returns (uint rawVote);
 }
 
 contract CrowdsaleMinter is Owned {
 
+    // BK Ok
     string public constant VERSION = "0.2.1";
 
     /* ====== configuration START ====== */
+    // BK Next 5 Ok
     uint public constant COMMUNITY_SALE_START = 3973420; /* approx. 04.07.2017 16:00 GMT+1 */
     uint public constant PRIORITY_SALE_START  = 3978496; /* approx. 05.07.2017 16:00 GMT+1 */
     uint public constant PUBLIC_SALE_START    = 3983578; /* approx. 06.07.2017 16:00 GMT+1 */
     uint public constant PUBLIC_SALE_END      = 4130967; /* approx. 04.08.2017 16:00 GMT+1 */
     uint public constant WITHDRAWAL_END       = 4288520; /* approx. 04.09.2017 16:00 GMT+1 */
     
+    // BK Next 2 Ok
     address public TEAM_GROUP_WALLET           = 0xA0D8F33Ef9B44DaAE522531DD5E7252962b09207;
     address public ADVISERS_AND_FRIENDS_WALLET = 0x44f145f6Bc36e51eED9b661e99C8b9CCF987c043;
 
+    // BK Next 2 Ok
     uint public constant TEAM_BONUS_PER_CENT            = 18;
     uint public constant ADVISORS_AND_PARTNERS_PER_CENT = 10;
 
+    // BK Ok
     MintableToken      public TOKEN                    = MintableToken(0x00000000000000000000000000);
 
+    // BK Next 4 Ok
     AddressList        public PRIORITY_ADDRESS_LIST    = AddressList(0x9411Cf70F97C2ED09325e58629D48401aEd50F89);
     MinMaxWhiteList    public COMMUNITY_ALLOWANCE_LIST = MinMaxWhiteList(0xd2675d3ea478692ad34f09fa1f8bda67a9696bf7);
     BalanceStorage     public PRESALE_BALANCES         = BalanceStorage(0x4Fd997Ed7c10DbD04e95d3730cd77D79513076F2);
     PresaleBonusVoting public PRESALE_BONUS_VOTING     = PresaleBonusVoting(0x283a97Af867165169AECe0b2E963b9f0FC7E5b8c);
 
+    // BK Next 6 Ok
     uint public constant COMMUNITY_PLUS_PRIORITY_SALE_CAP_ETH = 45000;
     uint public constant MIN_TOTAL_AMOUNT_TO_RECEIVE_ETH = 15000;
     uint public constant MAX_TOTAL_AMOUNT_TO_RECEIVE_ETH = 45000;
@@ -194,6 +280,7 @@ contract CrowdsaleMinter is Owned {
     uint public constant PRE_SALE_BONUS_PER_CENT = 54;
 
     //constructor
+    // BK Ok
     function CrowdsaleMinter() {
         //check configuration if something in setup is looking weird
         if (
@@ -227,6 +314,7 @@ contract CrowdsaleMinter is Owned {
 
     /* ====== public states START====== */
 
+    // BK Next 5 Ok
     bool public isAborted = false;
     mapping (address => uint) public balances;
     bool public TOKEN_STARTED = false;
@@ -234,22 +322,28 @@ contract CrowdsaleMinter is Owned {
     address[] public investors;
 
     //displays number of uniq investors
+    // BK Ok
     function investorsCount() constant external returns(uint) { return investors.length; }
 
     //displays received amount in eth upto now
+    // BK Ok
     function TOTAL_RECEIVED_ETH() constant external returns (uint) { return total_received_amount / 1 ether; }
 
     //displays current contract state in human readable form
+    // BK Ok
     function state() constant external returns (string) { return stateNames[ uint(currentState()) ]; }
 
+    // BK Next 2 Ok
     function san_whitelist(address addr) public constant returns(uint, uint) { return COMMUNITY_ALLOWANCE_LIST.allowed(addr); }
     function cfi_whitelist(address addr) public constant returns(bool) { return PRIORITY_ADDRESS_LIST.contains(addr); }
 
     /* ====== public states END ====== */
 
+    // BK Next 2 Ok
     string[] private stateNames = ["BEFORE_START", "COMMUNITY_SALE", "PRIORITY_SALE", "PRIORITY_SALE_FINISHED", "PUBLIC_SALE", "BONUS_MINTING", "WITHDRAWAL_RUNNING", "REFUND_RUNNING", "CLOSED" ];
     enum State { BEFORE_START, COMMUNITY_SALE, PRIORITY_SALE, PRIORITY_SALE_FINISHED, PUBLIC_SALE, BONUS_MINTING, WITHDRAWAL_RUNNING, REFUND_RUNNING, CLOSED }
 
+    // BK Next 5 Ok
     uint private constant COMMUNITY_PLUS_PRIORITY_SALE_CAP = COMMUNITY_PLUS_PRIORITY_SALE_CAP_ETH * 1 ether;
     uint private constant MIN_TOTAL_AMOUNT_TO_RECEIVE = MIN_TOTAL_AMOUNT_TO_RECEIVE_ETH * 1 ether;
     uint private constant MAX_TOTAL_AMOUNT_TO_RECEIVE = MAX_TOTAL_AMOUNT_TO_RECEIVE_ETH * 1 ether;
@@ -284,6 +378,8 @@ contract CrowdsaleMinter is Owned {
             _receiveFundsUpTo(amount_allowed);
         } else if (state == State.REFUND_RUNNING) {
             // any entring call in Refund Phase will cause full refund
+            // BK NOTE - Anyone can call this
+            //         - _sendRefund() will restrict to accounts with non-zero balances only
             _sendRefund();
         } else {
             throw;
@@ -294,6 +390,8 @@ contract CrowdsaleMinter is Owned {
     function refund() external
     inState(State.REFUND_RUNNING)
     noAnyReentrancy
+    // BK NOTE - Anyone can call this
+    //         - _sendRefund() will restrict to accounts with non-zero balances only
     {
         _sendRefund();
     }
@@ -301,8 +399,15 @@ contract CrowdsaleMinter is Owned {
 
     function withdrawFundsAndStartToken() external
     inState(State.WITHDRAWAL_RUNNING)
+    // BK Ok - This function can only be called after anyone calls mintAllBonuses()
     noAnyReentrancy
+    // BK Ok - Only the owner can execute this
     only(owner)
+    // BK Ok - In the worst case, the funds will be transferred. The TOKEN.call(...) may fail and there may be no way to detect the
+    //         issue, but a new token contract can be redeployed with the correct details
+    //       - There was an issue in the testing where the ownership of the SAN token contract is not set to this CrowdsaleMinter
+    //         contract. Funds were transferred, but the SAN token contract was not `start()`-ed . In this case, the owner was
+    //         an account that could manually start the token contract operations
     {
         // transfer funds to owner
         if (!owner.send(this.balance)) throw;
@@ -320,6 +425,7 @@ contract CrowdsaleMinter is Owned {
     function mintAllBonuses() external
     inState(State.BONUS_MINTING)
     noAnyReentrancy
+    // BK NOTE - Anyone can call this
     {
         assert(!allBonusesAreMinted);
         allBonusesAreMinted = true;
@@ -343,6 +449,7 @@ contract CrowdsaleMinter is Owned {
 
     }
 
+    // BK NOTE - Anyone can call this via mintAllBonuses()
     function mintPresaleBonuses() internal returns(uint amount) {
         uint total_presale_amount_with_bonus = 0;
         //mint presale bonuses
@@ -357,6 +464,9 @@ contract CrowdsaleMinter is Owned {
         return total_presale_amount_with_bonus;
     }
 
+    // BK NOTE - Anyone can call this via mintPresaleBonuses() which is called by mintAllBonuses()
+    //         - Anyone can call this directly as well
+    //         - Constant function anyway
     function presaleTokenAmount(address addr) public constant returns(uint){
         uint presale_balance = PRESALE_BALANCES.balances(addr);
         if (presale_balance > 0) {
@@ -381,6 +491,7 @@ contract CrowdsaleMinter is Owned {
     function attachToToken(MintableToken tokenAddr) external
     inState(State.BEFORE_START)
     only(owner)
+    // BK NOTE - Only owner can attach token to this contract, BEFORE_START
     {
         TOKEN = tokenAddr;
     }
@@ -388,6 +499,8 @@ contract CrowdsaleMinter is Owned {
     function abort() external
     inStateBefore(State.REFUND_RUNNING)
     only(owner)
+    // BK NOTE - Only owner can abort
+    //         - Can only be called before the state is CLOSED
     {
         isAborted = true;
     }
@@ -397,23 +510,36 @@ contract CrowdsaleMinter is Owned {
     //
 
     function _sendRefund() private
+    // BK NOTE - This function can be called from the default function () (has a payable modifier)
+    //         - This function can also be called from refund() (does not have a payable modifier)
+    //         - Only accounts with non-zero balances can call this 
     tokenHoldersOnly
     {
         // load balance to refund plus amount currently sent
+        // BK Ok - Also returning amounts accidentally sent, but no payable modifier anyway
         var amount_to_refund = balances[msg.sender] + msg.value;
         // reset balance
+        // BK Ok
         balances[msg.sender] = 0;
         // send refund back to sender
+        // BK NOTE - Last statement so logic cannot be hijacked with consequence
+        //         - Low gas passed via send() so any potential contract account cannot execute many operations
+        //         - balances for sender is zeroed previously, so recursion attack not possible
         if (!msg.sender.send(amount_to_refund)) throw;
     }
 
     function _receiveFundsUpTo(uint amount) private
     notTooSmallAmountOnly
     {
+        // BK Ok - Must be > 0 
         require (amount > 0);
         if (msg.value > amount) {
             // accept amount only and return change
+            // BK Ok - Cannot underflow to create a big value to refund
             var change_to_return = msg.value - amount;
+            // BK NOTE - Not the last statement - logic can be hijacked 
+            //         - But only low gas passed via send() so any potential contract account cannot execute many operations
+            //         - And the value returned will be smaller than the amount sent
             if (!msg.sender.send(change_to_return)) throw;
         } else {
             // accept full amount
@@ -462,18 +588,21 @@ contract CrowdsaleMinter is Owned {
     //
 
     //fails if state dosn't match
+    // BK Ok
     modifier inState(State state) {
         if (state != currentState()) throw;
         _;
     }
 
     //fails if the current state is not before than the given one.
+    // BK Ok. Note >=
     modifier inStateBefore(State state) {
         if (currentState() >= state) throw;
         _;
     }
 
     //accepts calls from token holders only
+    // BK Ok
     modifier tokenHoldersOnly(){
         if (balances[msg.sender] == 0) throw;
         _;
@@ -481,6 +610,7 @@ contract CrowdsaleMinter is Owned {
 
 
     // don`t accept transactions with value less than allowed minimum
+    // BK Ok
     modifier notTooSmallAmountOnly(){
         if (msg.value < MIN_ACCEPTED_AMOUNT) throw;
         _;
@@ -540,7 +670,7 @@ contract CrowdsaleMinter is Owned {
 
 ## SAN Token Contract
 
-From the `TOKEN` field of the CrowdsaleMinter contract, the SAN token contract is deployed at [0x7221816f73e710eb952ce08bcaf54a31600fae6c](https://etherscan.io/address/0x7221816f73e710eb952ce08bcaf54a31600fae6c#code) with the following code:
+From the `TOKEN` field of the CrowdsaleMinter contract, the SAN token contract is deployed at [0x7221816f73e710eb952ce08bcaf54a31600fae6c](https://etherscan.io/address/0x7221816f73e710eb952ce08bcaf54a31600fae6c#code) with the following code, with v0.4.11+commit.68ef5810 and optimised:
 
 ```javascript
 pragma solidity ^0.4.11;
@@ -564,6 +694,7 @@ pragma solidity ^0.4.11;
 /// @author Santiment LLC
 /// @title  SAN - santiment token
 
+// BK Ok - See CrowdsaleMinter::Base
 contract Base {
 
     function max(uint a, uint b) returns (uint) { return a >= b ? a : b; }
@@ -621,6 +752,7 @@ contract Base {
 
 }
 
+// BK Ok - See CrowdsaleMinter::Owned
 contract Owned is Base {
 
     address public owner;
@@ -888,7 +1020,7 @@ contract SAN is Owned, ERC20 {
 
 # Subscription Module
 
-From the `SUBSCRIPTION_MODULE` field of the SAN token contract, the SubscriptionModule contract is deployed at [0x29f0b7c3d8ee8f6471922f089f459cab53029113](https://etherscan.io/address/0x29f0b7c3d8ee8f6471922f089f459cab53029113#code) with the following code:
+From the `SUBSCRIPTION_MODULE` field of the SAN token contract, the SubscriptionModule contract is deployed at [0x29f0b7c3d8ee8f6471922f089f459cab53029113](https://etherscan.io/address/0x29f0b7c3d8ee8f6471922f089f459cab53029113#code) with the following code, with v0.4.11+commit.68ef5810 and optimised:
 
 ```javascript
 pragma solidity ^0.4.11;
@@ -912,6 +1044,7 @@ pragma solidity ^0.4.11;
 /// @author Santiment LLC
 /// @title  Subscription Module for SAN - santiment token
 
+// BK Ok - See CrowdsaleMinter::Base
 contract Base {
 
     function max(uint a, uint b) returns (uint) { return a >= b ? a : b; }
@@ -969,6 +1102,7 @@ contract Base {
 
 }
 
+// BK Ok - See CrowdsaleMinter::Owned
 contract Owned is Base {
 
     address public owner;
@@ -992,6 +1126,7 @@ contract Owned is Base {
 }
 
 
+// BK Ok - But this is not referenced by SubscriptionModule
 contract ERC20 is Owned {
 
     event Transfer(address indexed _from, address indexed _to, uint256 _value);
@@ -1881,4 +2016,119 @@ contract SubscriptionModuleImpl is SubscriptionModule, Owned  {
     }
 
 } //SubscriptionModuleImpl
+```
+
+<br />
+
+<hr />
+
+## SantimentWhiteList
+
+From the `COMMUNITY_ALLOWANCE_LIST` field of the CrowdsaleMinter contract, the SantimentWhiteList contract is deployed at [0xd2675d3ea478692ad34f09fa1f8bda67a9696bf7](https://etherscan.io/address/0xd2675d3ea478692ad34f09fa1f8bda67a9696bf7#code) with the following code, with Soliditiy v0.4.11+commit.68ef5810 and optimised:
+
+```javascript
+// BK Ok
+pragma solidity ^0.4.11;
+
+//
+// ==== DISCLAIMER ====
+//
+// ETHEREUM IS STILL AN EXPEREMENTAL TECHNOLOGY.
+// ALTHOUGH THIS SMART CONTRACT WAS CREATED WITH GREAT CARE AND IN THE HOPE OF BEING USEFUL, NO GUARANTEES OF FLAWLESS OPERATION CAN BE GIVEN.
+// IN PARTICULAR - SUBTILE BUGS, HACKER ATTACKS OR MALFUNCTION OF UNDERLYING TECHNOLOGY CAN CAUSE UNINTENTIONAL BEHAVIOUR.
+// YOU ARE STRONGLY ENCOURAGED TO STUDY THIS SMART CONTRACT CAREFULLY IN ORDER TO UNDERSTAND POSSIBLE EDGE CASES AND RISKS.
+// DON'T USE THIS SMART CONTRACT IF YOU HAVE SUBSTANTIAL DOUBTS OR IF YOU DON'T KNOW WHAT YOU ARE DOING.
+//
+// THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+// AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+// INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+// OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+// OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// ====
+//
+//
+// ==== PARANOIA NOTICE ====
+// A careful reader will find some additional checks and excessive code, consuming some extra gas. This is intentional.
+// Even though the contract should work without these parts, they make the code more secure in production and for future refactoring.
+// Also, they show more clearly what we have considered and addressed during development.
+// Discussion is welcome!
+// ====
+//
+
+/// @author written by ethernian for Santiment Sagl
+/// @notice report bugs to: bugs@ethernian.com
+/// @title Santiment WhiteList contract
+contract SantimentWhiteList {
+
+    string constant public VERSION = "0.3.1";
+
+    function () { throw; }   //explicitly unpayable
+
+    struct Limit {
+        uint24 min;  //finney
+        uint24 max;  //finney
+    }
+
+    struct LimitWithAddr {
+        address addr;
+        uint24 min; //finney
+        uint24 max; //finney
+    }
+
+    mapping(address=>Limit) public allowed;
+    uint16  public chunkNr = 0;
+    uint    public recordNum = 0;
+    uint256 public controlSum = 0;
+    bool public isSetupMode = true;
+    address public admin;
+
+    function SantimentWhiteList() { admin = msg.sender; }
+
+    ///@dev add next address package to the internal white list.
+    ///@dev call is allowed in setup mode only.
+    function addPack(address[] addrs, uint24[] mins, uint24[] maxs, uint16 _chunkNr)
+    setupOnly
+    adminOnly
+    external {
+        var len = addrs.length;
+        require ( chunkNr++ == _chunkNr);
+        require ( mins.length == len &&  mins.length == len );
+        for(uint16 i=0; i<len; ++i) {
+            var addr = addrs[i];
+            var max  = maxs[i];
+            var min  = mins[i];
+            Limit lim = allowed[addr];
+            //remove old record if exists
+            if (lim.max > 0) {
+                controlSum -= uint160(addr) + lim.min + lim.max;
+                delete allowed[addr];
+            }
+            //insert record if max > 0
+            if (max > 0) {
+                // max > 0 means add a new record into the list.
+                allowed[addr] = Limit({min:min, max:max});
+                controlSum += uint160(addr) + min + max;
+            }
+        }//for
+        recordNum+=len;
+    }
+
+    ///@notice switch off setup mode
+    function start()
+    adminOnly
+    public {
+        isSetupMode = false;
+    }
+
+    modifier setupOnly {
+        if ( !isSetupMode ) throw;
+        _;
+    }
+
+    modifier adminOnly {
+        if (msg.sender != admin) throw;
+        _;
+    }
+
+}
 ```
